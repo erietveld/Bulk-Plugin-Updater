@@ -1,0 +1,273 @@
+<!-- src/client/index.html -->
+<!-- Architecture.md Section 4.5: Pattern 2A + 2B Implementation -->
+<!-- ServiceNow UI Page with Jelly template injection for immediate data -->
+<html>
+<head>
+  <title>Store Updates Management - React Dashboard</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Batch Store Updates for ServiceNow">
+  <sdk:now-ux-globals></sdk:now-ux-globals>
+  
+  <!-- Safe Security Headers (Zero Performance Impact) -->
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+  <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+
+  <!-- CRITICAL: Mantine CSS Dependencies -->
+  <!-- Architecture.md CDN RESOURCE VALIDATION: These URLs are validated and working -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mantine/core@8.3.6/styles.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mantine/dates@8.3.6/styles.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mantine/notifications@8.3.6/styles.css" />
+  <!-- Optional: Mantine code highlighting CSS (if using code components) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mantine/code-highlight@8.3.6/styles.css" />
+ 
+  <style>
+    /* Loading state while React initializes */
+    .loading-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      padding: 2rem;
+      text-align: center;
+    }
+    
+    .loading-title {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 1.8rem;
+      font-weight: 600;
+      color: #228be6;
+      margin: 0 0 0.5rem 0;
+    }
+    
+    .loading-subtitle {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 1rem;
+      color: #868e96;
+      margin: 0;
+    }
+    
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid #e9ecef;
+      border-top: 4px solid #228be6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 1rem 0;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    /* Hide loading once React takes over */
+    [data-react-component="true"].react-ready .loading-container {
+      display: none;
+    }
+    
+    /* TanStack Query DevTools Custom Styling for ServiceNow */
+    .tsqd-parent-container {
+      z-index: 999999 !important;
+    }
+    
+    .tsqd-main-panel {
+      background: white !important;
+      border: 1px solid #e0e0e0 !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    .tsqd-query-row {
+      border-bottom: 1px solid #f0f0f0 !important;
+    }
+    
+    .tsqd-query-hash {
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+    }
+  </style>
+</head>
+<body>
+  <!-- React will mount here -->
+  <div id="root" data-react-component="true">
+    <div class="loading-container">
+      <h1 class="loading-title">ServiceNow Store Updates Manager</h1>
+      <div class="loading-spinner"></div>
+      <p class="loading-subtitle">Loading dual-source hybrid statistics...</p>
+    </div>
+  </div>
+  
+  <!-- Pattern 2B: Enhanced Data - Complex server-side calculations using g:evaluate -->
+  <g:evaluate>
+    // Pattern 2B: Server-side GlideAggregate calculations for quickStats
+
+    var currentUser = gs.getUser();
+    var currentUserName = gs.getUserName();
+    
+    // Total records calculation
+    var quickStatsAgg = new GlideAggregate('x_snc_store_upda_1_store_updates');
+    quickStatsAgg.addAggregate('COUNT');
+    quickStatsAgg.query();
+    var totalRecords = quickStatsAgg.next() ? quickStatsAgg.getAggregate('COUNT') : '0';
+    
+    // Level distribution calculation
+    var levelAgg = new GlideAggregate('x_snc_store_upda_1_store_updates');
+    levelAgg.addAggregate('COUNT');
+    levelAgg.groupBy('level');
+    levelAgg.query();
+    
+    var majorCount = '0', minorCount = '0', patchCount = '0';
+    while (levelAgg.next()) {
+      var level = levelAgg.getValue('level');
+      var count = levelAgg.getAggregate('COUNT');
+      if (level === 'major') majorCount = count;
+      else if (level === 'minor') minorCount = count;  
+      else if (level === 'patch') patchCount = count;
+    }
+    
+    // Batch level distribution calculation
+    var batchAgg = new GlideAggregate('x_snc_store_upda_1_store_updates');
+    batchAgg.addAggregate('COUNT');
+    batchAgg.groupBy('batch_level');
+    batchAgg.query();
+    
+    var criticalCount = '0', highCount = '0', mediumCount = '0', lowCount = '0';
+    while (batchAgg.next()) {
+      var batchLevel = batchAgg.getValue('batch_level');
+      var count = batchAgg.getAggregate('COUNT');
+      if (batchLevel === 'critical') criticalCount = count;
+      else if (batchLevel === 'high') highCount = count;
+      else if (batchLevel === 'medium') mediumCount = count;
+      else if (batchLevel === 'low') lowCount = count;
+    }
+
+    var userGR = new GlideRecord('sys_user');
+    userGR.addQuery('sys_id', currentUser.getID());
+    userGR.query();
+    
+    var userTimeZone = '';
+    var userDateFormat = '';
+    var userTimeFormat = '';
+    var userLanguage = '';
+    
+    if (userGR.next()) {
+      userTimeZone = userGR.getValue('time_zone') || 'UTC';
+      userDateFormat = userGR.getValue('date_format') || 'yyyy-MM-dd';
+      userTimeFormat = userGR.getValue('time_format') || 'HH:mm:ss';
+      userLanguage = userGR.getValue('language') || 'en';
+    }
+  </g:evaluate>
+
+  <script type="text/javascript">
+    // Pattern 2A: Simple Jelly template substitutions for immediate user context
+    var userContext = {
+      sys_id: "${gs.getUserID()}",
+      user_name: "${gs.getUserName()}",
+      display_name: "${gs.getUser().getDisplayName()}",
+      first_name: "${gs.getUser().getFirstName()}",
+      last_name: "${gs.getUser().getLastName()}",
+      email: "${gs.getUser().getEmail()}",
+      roles: "${gs.getUser().getRoles().toString()}",
+      is_admin: "${gs.getUser().hasRole('admin')}",
+      session_id: "${gs.getSessionID()}",
+      time_zone: "${userTimeZone}",
+      date_format: "${userDateFormat}",
+      time_format: "${userTimeFormat}",
+      language: "${userLanguage}",
+      pattern2A: {
+        isAvailable: true,
+        loadTime: new Date().toISOString()
+      }
+    };
+    
+    // Pattern 2A: System context using simple Jelly substitutions
+    var systemContext = {
+      instance_name: "${gs.getProperty('instance_name')}" || "${gs.getProperty('glide.servlet.uri')}",
+      base_url: "${gs.getProperty('glide.servlet.uri')}",
+      build_date: "${gs.getProperty('glide.build.date')}",
+      version: "${gs.getProperty('glide.war')}",
+      sys_time_zone: "${gs.getProperty('glide.sys.default.tz')}", 
+      current_time: "${new GlideDateTime().getDisplayValue()}",
+      current_time_ms: "${new GlideDateTime().getNumericValue()}",
+      debug_enabled: "${gs.getProperty('glide.debug') == 'true' || gs.getSession().isDebugging()}",
+    };
+    
+    // Pattern 2A: Application context using simple substitutions
+    var appContext = {
+      app_scope: "x_snc_store_upda_1",
+      app_name: "Store Upda 1", 
+      app_version: "1.0.0",
+      table_name: "x_snc_store_upda_1_store_updates",
+      has_admin_role: userContext.is_admin,
+      can_export: userContext.is_admin || "${gs.getUser().hasRole('export_rest_api')}",
+      can_bulk_update: userContext.is_admin || "${gs.getUser().hasRole('itil')}",
+      max_export_records: "${gs.getProperty('glide.export.max_records')}" || '10000',
+      enable_debug_panel: systemContext.debug_enabled || userContext.is_admin
+    };
+    
+    // Pattern 2B: Quick statistics from server-side GlideAggregate calculations
+    var quickStats = {
+      totalRecords: parseInt("${totalRecords}" || '0'),
+      levelDistribution: {
+        major: "${majorCount}",
+        minor: "${minorCount}",
+        patch: "${patchCount}"
+      },
+      batchLevelDistribution: {
+        critical: "${criticalCount}",
+        high: "${highCount}",
+        medium: "${mediumCount}",
+        low: "${lowCount}"
+      },
+      calculatedAt: "${new GlideDateTime().getDisplayValue()}",
+      source: 'pattern-2b-server-calculated'
+    };
+
+    // Architecture.md Pattern 2A + 2B: Inject complete server-side data for zero loading states        
+    window.snImmediateData = {
+      userContext: userContext,
+      systemContext: systemContext,
+      appContext: appContext,
+      quickStats: quickStats,
+      injectionTime: "${new GlideDateTime().getDisplayValue()}",
+      pattern: '2A-immediate-data-2B-enhanced-data'
+    };
+    
+    // Pattern 2A: Log successful injection for debugging
+    if (window.console && window.console.log) {
+      console.log('[Pattern 2A + 2B] Dual-source data injected successfully:', {
+        userFirstName: userContext.first_name,
+        totalRecords: quickStats.totalRecords,
+        majorUpdates: quickStats.levelDistribution.major,
+        minorUpdates: quickStats.levelDistribution.minor,
+        patchUpdates: quickStats.levelDistribution.patch,
+        isAdmin: userContext.is_admin,
+        injectionTime: window.snImmediateData.injectionTime
+      });
+    }
+
+    // Show Pattern 2A + 2B injection details in debug mode
+    if (window.location.search.includes('sn_debug=true')) {
+      console.log('[Pattern 2A + 2B Debug] Complete data details:', {
+        injectionTime: window.snImmediateData?.injectionTime,
+        userFirstName: window.snImmediateData?.userContext?.first_name,
+        instanceName: window.snImmediateData?.systemContext?.instance_name,
+        appScope: window.snImmediateData?.appContext?.app_scope,
+        totalRecords: window.snImmediateData?.quickStats?.totalRecords,
+        majorUpdates: window.snImmediateData?.quickStats?.levelDistribution?.major,
+        hasAdminRole: window.snImmediateData?.appContext?.has_admin_role,
+        canExport: window.snImmediateData?.appContext?.can_export,
+        maxExportRecords: window.snImmediateData?.appContext?.max_export_records,
+        dataAvailable: !!window.snImmediateData,
+        patternUsed: window.snImmediateData?.pattern
+      });
+    }
+  </script>
+  
+  <!-- Load React application -->
+  <script src="main.tsx" type="module"></script>
+</body>
+</html>

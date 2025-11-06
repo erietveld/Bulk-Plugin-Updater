@@ -1,0 +1,48 @@
+{
+    "compilerOptions": {
+      "target": "ES2022",
+      "lib": ["DOM", "DOM.Iterable", "ES2022"],
+      "allowJs": true,
+      "skipLibCheck": true,
+      "esModuleInterop": true,
+      "allowSyntheticDefaultImports": true,
+      "strict": true,
+      "forceConsistentCasingInFileNames": true,
+      "noFallthroughCasesInSwitch": true,
+      "module": "ESNext",
+      "moduleResolution": "node",
+      "resolveJsonModule": true,
+      "isolatedModules": true,
+      "noEmit": true,
+      "jsx": "react-jsx",
+      "baseUrl": ".",
+      "paths": {
+        "@/*": ["src/*"],
+        "@/components/*": ["src/components/*"],
+        "@/client/*": ["src/client/*"],
+        "@/server/*": ["src/server/*"],
+        "@/hooks/*": ["src/hooks/*"],
+        "@/state/*": ["src/state/*"],
+        "@/types/*": ["src/types/*"],
+        "@/monitoring/*": ["src/monitoring/*"],
+        "@/error/*": ["src/error/*"],
+        "@/router/*": ["src/router/*"],
+        "@/design-system/*": ["src/design-system/*"]
+      },
+      "incremental": true,
+      "tsBuildInfoFile": ".tsbuildinfo",
+      "noUncheckedIndexedAccess": true,
+      "exactOptionalPropertyTypes": true,
+      "noImplicitReturns": true,
+      "noImplicitOverride": true,
+      "declaration": false,
+      "declarationMap": false,
+      "sourceMap": true,
+      "types": ["node"]
+    },
+    "include": ["src/**/*", "*.d.ts"],
+    "exclude": ["node_modules", "dist", "build", "*.config.js", "*.config.ts", "coverage"],
+    "ts-node": {
+      "esm": true
+    }
+  }
