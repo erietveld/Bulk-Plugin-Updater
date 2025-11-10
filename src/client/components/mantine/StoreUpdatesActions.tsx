@@ -1,10 +1,16 @@
 // src/client/components/mantine/StoreUpdatesActions.tsx
-// PHASE 4: Show action buttons initially (greyed out), activate on selection
-// DARK MODE: Fixed greyed button visibility for both light and dark themes
-// Batch actions component for Store Updates
-// Following Architecture.md patterns with comprehensive action handling
+// ARCHITECTURE COMPLIANT: Follows core-principles.md separation of concerns
+// React Components: Handle UI rendering only
+// Custom Hooks: Manage business logic and local state (useInstallUpdates)
+// Zustand Stores: Handle global state (useBatchProgressStore)
+// ServiceNow Services: Handle API communication (apiService.installUpdates)
+// TanStack Query: Data fetching with proper caching (useMutation)
+// ENHANCED: Added Install Minor button and proper admin role requirements
+// SMART REFRESH: Differentiate between client-side clearing and data-changing operations
+// LAYOUT FIX: Moved action icons to top-right, always visible, no layout shifts
+// SYNC FIX: Fixed sync operation to follow same refresh pattern as install operations
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Group,
   Button,
@@ -18,7 +24,8 @@ import {
   Alert,
   Divider,
   Progress,
-  useMantineColorScheme
+  useMantineColorScheme,
+  Box
 } from '@mantine/core';
 import {
   IconDownload,
@@ -30,219 +37,489 @@ import {
   IconCheck,
   IconDots,
   IconUrgent,
-  IconBandage
+  IconBandage,
+  IconInfoCircle,
+  IconSelectAll,
+  IconRefresh
 } from '@tabler/icons-react';
 
+import { useQueryClient } from '@tanstack/react-query'; // NEW: For sync cache invalidation
 import type { useStoreUpdatesSelection } from '../../../hooks/useStoreUpdatesSelection';
+import type { useStoreUpdatesFiltering, StoreUpdate } from '../../../hooks/useStoreUpdatesHybrid';
+import { useInstallUpdates } from '../../../hooks/useInstallUpdates';
+import { useBatchProgressStore } from '../../../stores/batchProgressStore';
+import { useEnhancedUserContext } from '../../../hooks/useUserContext'; // FIXED: Use proper admin role detection
 import { logger } from '../../../monitoring/logger';
 import { GenericButton } from '../../../components/mantine/Button';
+import { SelectedItemsOverlay } from './SelectedItemsOverlay';
+import { apiService } from '../../../api/apiService';
+import { storeUpdatesQueryKeys } from '../../../hooks/useStoreUpdatesHybrid'; // NEW: For cache invalidation
 
 interface StoreUpdatesActionsProps {
   selectionHook: ReturnType<typeof useStoreUpdatesSelection>;
   recordCount: number;
   compactMode?: boolean;
   onBatchAction?: (actionId: string, selectedIds: string[]) => void;
+  onDataRefresh?: () => Promise<void>; // NEW: For data-changing operations
+  onClearState?: () => void; // NEW: For client-side clearing only
+  filteringHook?: ReturnType<typeof useStoreUpdatesFiltering>; // NEW: For clearing filters
+  allRecords?: StoreUpdate[]; // All available records for level-specific selections
 }
 
 /**
- * PHASE 4: Always show action buttons, greyed out initially, activated on selection
- * DARK MODE: Enhanced button visibility with proper color variants for both themes
- * Batch actions component for Store Updates
- * Provides comprehensive batch operations based on selection
+ * Hook that provides StoreUpdatesActions components for flexible positioning
+ * ARCHITECTURE COMPLIANT: Pure UI component following core-principles.md
+ * - React Components: Handle UI rendering only
+ * - Custom Hooks: Business logic managed by useInstallUpdates
+ * - Zustand Stores: Global state managed by useBatchProgressStore
+ * - Service Layer: API calls handled by apiService
+ * - TanStack Query: Mutations handled in custom hook
+ * ENHANCED: Proper admin role detection and smart refresh strategy
+ * LAYOUT FIX: Returns separate components for flexible positioning
+ * SYNC FIX: Fixed sync refresh to match install refresh pattern
  */
-export const StoreUpdatesActions: React.FC<StoreUpdatesActionsProps> = ({
+export const useStoreUpdatesActions = ({
   selectionHook,
   recordCount,
   compactMode = false,
-  onBatchAction
-}) => {
+  onBatchAction,
+  onDataRefresh, // Data-changing operations
+  onClearState, // Client-side clearing only
+  filteringHook,
+  allRecords = []
+}: StoreUpdatesActionsProps) => {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === 'dark';
 
-  // State for confirmation modals
-  const [confirmationModal, setConfirmationModal] = React.useState<{
-    open: boolean;
-    actionId: string;
-    actionLabel: string;
-    selectedCount: number;
-  }>({
-    open: false,
-    actionId: '',
-    actionLabel: '',
-    selectedCount: 0
+  // NEW: TanStack Query client for sync cache invalidation
+  const queryClient = useQueryClient();
+
+  // FIXED: Use proper admin role detection from local store
+  const userContext = useEnhancedUserContext();
+  const isAdmin = userContext.isAdmin;
+
+  // Local state for overlay and sync
+  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // ARCHITECTURE: Custom hook handles all business logic with smart refresh
+  const { 
+    installAllMutation,
+    confirmationModal,
+    showConfirmationModal,
+    hideConfirmationModal,
+    handleConfirmInstallation
+  } = useInstallUpdates(selectionHook, {
+    // FIXED: Only pass onInstallationComplete if onDataRefresh is defined
+    ...(onDataRefresh && { onInstallationComplete: onDataRefresh })
   });
 
-  // State for batch operation progress
-  const [batchProgress, setBatchProgress] = React.useState<{
-    active: boolean;
-    actionId: string;
-    progress: number;
-    message: string;
-  }>({
-    active: false,
-    actionId: '',
-    progress: 0,
-    message: ''
-  });
+  // ARCHITECTURE: Zustand store handles global state
+  const batchProgressStore = useBatchProgressStore();
+  const isInstalling = batchProgressStore.isActive();
+  const progress = batchProgressStore.progress;
+  const message = batchProgressStore.message;
 
-  // Handle batch action execution
-  const handleBatchAction = useCallback(async (actionId: string) => {
-    const action = selectionHook.availableBatchOperations.find(op => op.id === actionId);
-    if (!action) {
-      const errorMessage = `Batch action not found: ${actionId}`;
-      logger.error(errorMessage, new Error(errorMessage));
+  // Handle overlay open/close
+  const handleOpenOverlay = useCallback(() => {
+    setIsOverlayOpen(true);
+  }, []);
+
+  const handleCloseOverlay = useCallback(() => {
+    setIsOverlayOpen(false);
+  }, []);
+
+  // Auto-close overlay when all items are deselected
+  React.useEffect(() => {
+    if (isOverlayOpen && !selectionHook.stats.hasSelection) {
+      setIsOverlayOpen(false);
+    }
+  }, [isOverlayOpen, selectionHook.stats.hasSelection]);
+
+  // FIXED: Install Major - Use same working pattern as Install All but with filtering
+  const handleInstallMajor = useCallback(async () => {
+    if (!isAdmin) {
+      logger.warn('Install Major attempted without admin privileges');
       return;
     }
 
-    const selectedIds = selectionHook.selection.selectedIds;
+    const majorRecords = allRecords.filter(record => record.level === 'major');
     
+    if (majorRecords.length === 0) {
+      logger.info('No major updates available');
+      return;
+    }
+
+    // FIXED: Use same pattern as Install All - clear selection first, then select filtered records
+    selectionHook.clearSelection();
+    selectionHook.selectRecords(majorRecords, 'replace');
+    
+    // Show confirmation
+    showConfirmationModal('Install Major Updates', majorRecords.length);
+    
+    logger.info('Install Major initiated (FIXED: Using Install All pattern)', {
+      majorRecords: majorRecords.length,
+      totalRecords: allRecords.length,
+      autoSelected: true,
+      pattern: 'install-all-with-filter'
+    });
+  }, [isAdmin, allRecords, selectionHook, showConfirmationModal]);
+
+  // FIXED: Install Minor - Use same working pattern as Install All but with filtering
+  const handleInstallMinor = useCallback(async () => {
+    if (!isAdmin) {
+      logger.warn('Install Minor attempted without admin privileges');
+      return;
+    }
+
+    const minorRecords = allRecords.filter(record => record.level === 'minor');
+    
+    if (minorRecords.length === 0) {
+      logger.info('No minor updates available');
+      return;
+    }
+
+    // FIXED: Use same pattern as Install All - clear selection first, then select filtered records
+    selectionHook.clearSelection();
+    selectionHook.selectRecords(minorRecords, 'replace');
+    
+    // Show confirmation
+    showConfirmationModal('Install Minor Updates', minorRecords.length);
+    
+    logger.info('Install Minor initiated (FIXED: Using Install All pattern)', {
+      minorRecords: minorRecords.length,
+      totalRecords: allRecords.length,
+      autoSelected: true,
+      pattern: 'install-all-with-filter'
+    });
+  }, [isAdmin, allRecords, selectionHook, showConfirmationModal]);
+
+  // FIXED: Install Patches - Use same working pattern as Install All but with filtering
+  const handleInstallPatches = useCallback(async () => {
+    if (!isAdmin) {
+      logger.warn('Install Patches attempted without admin privileges');
+      return;
+    }
+
+    const patchRecords = allRecords.filter(record => record.level === 'patch');
+    
+    if (patchRecords.length === 0) {
+      logger.info('No patch updates available');
+      return;
+    }
+
+    // FIXED: Use same pattern as Install All - clear selection first, then select filtered records
+    selectionHook.clearSelection();
+    selectionHook.selectRecords(patchRecords, 'replace');
+    
+    // Show confirmation
+    showConfirmationModal('Install Patch Updates', patchRecords.length);
+    
+    logger.info('Install Patches initiated (FIXED: Using Install All pattern)', {
+      patchRecords: patchRecords.length,
+      totalRecords: allRecords.length,
+      autoSelected: true,
+      pattern: 'install-all-with-filter'
+    });
+  }, [isAdmin, allRecords, selectionHook, showConfirmationModal]);
+
+  // NEW: Install All - Auto-select all records and install (admin only)
+  const handleInstallAll = useCallback(async () => {
+    if (!isAdmin) {
+      logger.warn('Install All attempted without admin privileges');
+      return;
+    }
+
+    if (allRecords.length === 0) {
+      logger.info('No updates available for Install All');
+      return;
+    }
+
+    // Auto-select all records
+    selectionHook.selectAllVisible();
+    
+    // Show confirmation
+    showConfirmationModal('Install All Updates', allRecords.length);
+    
+    logger.info('Install All initiated', {
+      totalRecords: allRecords.length,
+      autoSelected: true
+    });
+  }, [isAdmin, allRecords, selectionHook, showConfirmationModal]);
+
+  // SYNC FIX: Handle sync applications with same refresh pattern as install operations
+  const handleSyncApplications = useCallback(async () => {
+    setIsSyncing(true);
+    
+    try {
+      logger.info('Starting sync applications process', {
+        pattern: 'sync-applications',
+        step: '1-trigger-sync'
+      });
+
+      // Step 1: Trigger sync
+      const triggerResponse = await apiService.get('/api/sn_appclient/appmanager/sync_apps', {
+        params: { request_type: 'trigger_apps_sync' }
+      });
+      
+      const trackerId = triggerResponse.result?.trackerId;
+      if (!trackerId) {
+        throw new Error('No tracker ID received from sync trigger');
+      }
+
+      logger.info('Sync triggered successfully', {
+        trackerId,
+        step: '2-polling-status'
+      });
+
+      // Step 2: Poll for completion with indeterminate progress
+      let attempts = 0;
+      const maxAttempts = 150; // 5 minutes max (150 * 2s)
+      
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second intervals
+        attempts++;
+        
+        try {
+          const statusResponse = await apiService.get('/api/sn_appclient/appmanager/sync_apps', {
+            params: { 
+              request_type: 'get_apps_sync_status',
+              tracker_id: trackerId 
+            }
+          });
+          
+          const isComplete = statusResponse.result?.isComplete;
+          
+          if (isComplete) {
+            logger.info('Sync completed successfully', {
+              trackerId,
+              attempts,
+              duration: attempts * 2,
+              appsLastSyncTime: statusResponse.result?.appsLastSyncTime
+            });
+
+            // SYNC FIX: Follow same pattern as install operations
+            try {
+              logger.info('Sync completed - starting data refresh like install operations', {
+                trackerId,
+                refreshPattern: 'install-like-refresh',
+                step: '1-clear-selections'
+              });
+
+              // Step 1: Clear selections (like install operations)
+              if (onClearState) {
+                onClearState(); // Clear selections + filters client-side
+              }
+              
+              // Step 2: Invalidate TanStack Query cache (like install operations)  
+              logger.info('Sync refresh - invalidating TanStack Query cache', {
+                trackerId,
+                refreshPattern: 'install-like-refresh',
+                step: '2-invalidate-cache'
+              });
+              
+              await queryClient.invalidateQueries({ 
+                queryKey: storeUpdatesQueryKeys.lists(),
+                exact: true 
+              });
+              
+              // Step 3: Trigger stale-while-revalidate refresh (like install operations)
+              logger.info('Sync refresh - triggering stale-while-revalidate refresh', {
+                trackerId,
+                refreshPattern: 'install-like-refresh',
+                step: '3-stale-while-revalidate'
+              });
+              
+              if (onDataRefresh) {
+                await onDataRefresh(); // Uses stale-while-revalidate pattern
+              }
+              
+              logger.info('Sync refresh completed successfully', {
+                trackerId,
+                refreshPattern: 'install-like-refresh',
+                step: '4-completed'
+              });
+              
+            } catch (refreshError) {
+              logger.error('Sync data refresh failed', 
+                refreshError instanceof Error ? refreshError : new Error(String(refreshError)),
+                { trackerId, refreshPattern: 'install-like-refresh' }
+              );
+            }
+            
+            break;
+          }
+          
+          // Still in progress - continue polling
+          logger.info('Sync in progress', {
+            trackerId,
+            attempts,
+            estimatedProgress: Math.min(95, 25 + (attempts * 2)) // Indeterminate progress
+          });
+          
+        } catch (pollError) {
+          logger.warn('Sync status polling error (continuing)', {
+            trackerId,
+            attempts,
+            error: pollError instanceof Error ? pollError.message : String(pollError)
+          });
+          // Continue polling on single error
+        }
+      }
+      
+      if (attempts >= maxAttempts) {
+        throw new Error('Sync operation timed out after 5 minutes');
+      }
+      
+    } catch (error) {
+      logger.error('Sync applications failed', 
+        error instanceof Error ? error : new Error(String(error)), {
+        step: 'sync-process',
+        errorType: error instanceof Error ? error.name : 'unknown'
+      });
+      throw error;
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [queryClient, onDataRefresh, onClearState]); // SYNC FIX: Added queryClient dependency
+
+  // Handle batch action execution - UI coordination only
+  const handleBatchAction = useCallback(async (actionId: string) => {
     logger.info('Batch action initiated', {
       actionId,
-      actionLabel: action.label,
-      selectedCount: selectedIds.length,
-      selectedIds
+      currentSelectedCount: selectionHook.selection.selectedIds.length
     });
 
-    // Show confirmation modal for actions that require it
-    if (action.requiresConfirmation) {
-      setConfirmationModal({
-        open: true,
-        actionId,
-        actionLabel: action.label,
-        selectedCount: selectedIds.length
-      });
-      return;
+    // Route to appropriate action handler - they handle their own selection logic
+    switch (actionId) {
+      case 'install-selected':
+        // Only check selection for install-selected since user must manually select
+        const selectedIds = selectionHook.selection.selectedIds;
+        if (selectedIds.length === 0) {
+          logger.warn('No items selected for install-selected action');
+          return;
+        }
+        if (!isAdmin) {
+          logger.warn('Install Selected attempted without admin privileges');
+          return;
+        }
+        showConfirmationModal('Install Selected', selectedIds.length);
+        break;
+      case 'install-all':
+        await handleInstallAll();
+        break;
+      case 'install-major':
+        await handleInstallMajor();
+        break;
+      case 'install-minor':
+        await handleInstallMinor();
+        break;
+      case 'install-patches':
+        await handleInstallPatches();
+        break;
+      default:
+        logger.warn('Unknown batch action', { actionId });
     }
+  }, [selectionHook.selection.selectedIds, isAdmin, showConfirmationModal, handleInstallAll, handleInstallMajor, handleInstallMinor, handleInstallPatches]);
 
-    // Execute action directly
-    await executeBatchAction(actionId, selectedIds);
-  }, [selectionHook]);
-
-  // Execute batch action
-  const executeBatchAction = useCallback(async (actionId: string, selectedIds: string[]) => {
-    setBatchProgress({
-      active: true,
-      actionId,
-      progress: 0,
-      message: 'Initializing batch operation...'
-    });
-
-    try {
-      // Simulate batch operation progress
-      const progressSteps = [
-        'Validating selection...',
-        'Preparing batch operation...',
-        'Processing updates...',
-        'Finalizing changes...',
-        'Complete!'
-      ];
-
-      for (let i = 0; i < progressSteps.length; i++) {
-        setBatchProgress(prev => ({
-          ...prev,
-          progress: ((i + 1) / progressSteps.length) * 100,
-          message: progressSteps[i] || 'Processing...'
-        }));
-
-        // Simulate processing time
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-
-      // Call external handler if provided
-      if (onBatchAction) {
-        await onBatchAction(actionId, selectedIds);
-      }
-
-      logger.info('Batch action completed successfully', {
-        actionId,
-        selectedCount: selectedIds.length
-      });
-
-      // Clear selection after successful batch operation
-      selectionHook.clearSelection();
-
-    } catch (error) {
-      const errorMessage = `Batch action failed: ${actionId}`;
-      const batchError = error instanceof Error ? error : new Error(errorMessage);
-      
-      logger.error('Batch action failed', batchError, {
-        actionId,
-        selectedCount: selectedIds.length,
-        errorDetails: error
-      });
-    } finally {
-      setBatchProgress({
-        active: false,
-        actionId: '',
-        progress: 0,
-        message: ''
-      });
-    }
-  }, [onBatchAction, selectionHook]);
-
-  // Handle confirmation modal confirmation
-  const handleConfirmAction = useCallback(async () => {
-    const { actionId } = confirmationModal;
-    const selectedIds = selectionHook.selection.selectedIds;
-    
-    setConfirmationModal(prev => ({ ...prev, open: false }));
-    await executeBatchAction(actionId, selectedIds);
-  }, [confirmationModal, selectionHook.selection.selectedIds, executeBatchAction]);
-
-  // Primary batch actions (most common) - Always show these
+  // Primary batch actions with admin role requirements
   const primaryActions = useMemo(() => {
-    const defaultActions = [
+    const actions = [
       {
-        id: 'install-all',
-        label: 'Install All',
+        id: 'install-selected',
+        label: 'Install Selected',
         icon: 'IconDownload',
         color: 'blue',
         applicableCount: selectionHook.stats.totalSelected,
         requiresConfirmation: true,
-        description: 'Install all selected updates'
+        requiresAdmin: true,
+        requiresSelection: true,
+        description: 'Install selected updates using ServiceNow subflow'
       },
       {
-        id: 'install-critical',
-        label: 'Install Critical',
+        id: 'install-all',
+        label: 'Install All',
+        icon: 'IconSelectAll',
+        color: 'blue',
+        applicableCount: allRecords.length,
+        requiresConfirmation: true,
+        requiresAdmin: true,
+        requiresSelection: false,
+        description: 'Select all updates and install using ServiceNow subflow'
+      },
+      {
+        id: 'install-major',
+        label: 'Install Major',
         icon: 'IconUrgent',
         color: 'red',
-        applicableCount: selectionHook.stats.totalSelected,
+        applicableCount: allRecords.filter(r => r.level === 'major').length,
         requiresConfirmation: true,
-        description: 'Install only critical updates'
+        requiresAdmin: true,
+        requiresSelection: false,
+        description: 'Install only major-level updates'
+      },
+      {
+        id: 'install-minor',
+        label: 'Install Minor',
+        icon: 'IconInfoCircle',
+        color: 'yellow',
+        applicableCount: allRecords.filter(r => r.level === 'minor').length,
+        requiresConfirmation: true,
+        requiresAdmin: true,
+        requiresSelection: false,
+        description: 'Install only minor-level updates'
       },
       {
         id: 'install-patches',
-        label: 'Install Patches',
+        label: 'Install Patch',
         icon: 'IconBandage',
         color: 'green',
-        applicableCount: selectionHook.stats.totalSelected,
-        requiresConfirmation: false,
+        applicableCount: allRecords.filter(r => r.level === 'patch').length,
+        requiresConfirmation: true,
+        requiresAdmin: true,
+        requiresSelection: false,
         description: 'Install patch updates only'
       }
     ];
 
-    // If we have selection hook operations, use those, otherwise show defaults
-    const availableActions = selectionHook.availableBatchOperations.length > 0 
-      ? selectionHook.availableBatchOperations 
-      : defaultActions;
+    return actions;
+  }, [selectionHook.stats.totalSelected, allRecords]);
 
-    return availableActions.filter(action =>
-      ['install-all', 'install-critical', 'install-patches'].includes(action.id)
-    );
-  }, [selectionHook.availableBatchOperations, selectionHook.stats.totalSelected]);
+  // LAYOUT FIX: Menu actions for the three-dots menu - always available with enable/disable logic
+  const menuActions = useMemo(() => {
+    return primaryActions.map(action => ({
+      ...action,
+      // Determine if this menu action should be enabled
+      isEnabled: () => {
+        const hasRequiredRole = !action.requiresAdmin || isAdmin;
+        const hasRequiredSelection = !action.requiresSelection || selectionHook.stats.hasSelection;
+        return hasRequiredRole && hasRequiredSelection && !isInstalling && !isSyncing;
+      },
+      // Get disabled reason for tooltip
+      getDisabledReason: () => {
+        if (!action.requiresAdmin || isAdmin) {
+          if (action.requiresSelection && !selectionHook.stats.hasSelection) {
+            return 'Select items first';
+          }
+          if (isInstalling || isSyncing) {
+            return 'Please wait for current operation to complete';
+          }
+        }
+        if (action.requiresAdmin && !isAdmin) {
+          return 'Administrator privileges required for installation operations';
+        }
+        return action.description;
+      }
+    }));
+  }, [primaryActions, isAdmin, selectionHook.stats.hasSelection, isInstalling, isSyncing]);
 
-  // Secondary batch actions (less common) - Only show when selections exist
-  const secondaryActions = useMemo(() => {
-    return selectionHook.availableBatchOperations.filter(action =>
-      !['install-all', 'install-critical', 'install-patches'].includes(action.id)
-    );
-  }, [selectionHook.availableBatchOperations]);
-
-  // Get action icon
+  // Get action icon - UI utility function
   const getActionIcon = useCallback((iconName: string): React.ReactNode => {
     const icons: Record<string, React.ReactNode> = {
       IconDownload: <IconDownload size={16} />,
+      IconSelectAll: <IconSelectAll size={16} />,
       IconUrgent: <IconUrgent size={16} />,
+      IconInfoCircle: <IconInfoCircle size={16} />,
       IconBandage: <IconBandage size={16} />,
       IconClock: <IconClock size={16} />,
       IconFileExport: <IconFileExport size={16} />,
@@ -251,7 +528,7 @@ export const StoreUpdatesActions: React.FC<StoreUpdatesActionsProps> = ({
     return icons[iconName] || <IconPlayerPlay size={16} />;
   }, []);
 
-  // Selection summary component - PHASE 4: Simplified messaging
+  // Enhanced Selection summary component - Shows app names and View All
   const SelectionSummary = () => {
     if (!selectionHook.stats.hasSelection) {
       return (
@@ -262,169 +539,282 @@ export const StoreUpdatesActions: React.FC<StoreUpdatesActionsProps> = ({
     }
 
     const { levelBreakdown } = selectionHook.stats;
+    const selectedRecords = selectionHook.selection.selectedRecords;
+    const totalSelected = selectionHook.stats.totalSelected;
+
+    // Get up to 5 application names using correct field access
+    const displayNames = selectedRecords
+      .slice(0, 5)
+      .map((item: any) => 
+        item['application.name'] || 
+        item.application_name || 
+        item.display_name || 
+        item.name || 
+        'Unknown App'
+      )
+      .join(', ');
+    const hasMore = totalSelected > 5;
 
     return (
-      <Group gap="xs">
-        <Badge variant="filled" color="blue">
-          {selectionHook.stats.totalSelected} selected
-        </Badge>
-        {(levelBreakdown.major || 0) > 0 && (
-          <Badge size="sm" color="red" variant="dot">
-            {levelBreakdown.major || 0} major
-          </Badge>
-        )}
-        {(levelBreakdown.minor || 0) > 0 && (
-          <Badge size="sm" color="yellow" variant="dot">
-            {levelBreakdown.minor || 0} minor
-          </Badge>
-        )}
-        {(levelBreakdown.patch || 0) > 0 && (
-          <Badge size="sm" color="green" variant="dot">
-            {levelBreakdown.patch || 0} patch
-          </Badge>
-        )}
-      </Group>
+      <Stack gap="xs">
+        {/* Application Names with View All */}
+        <Group gap="xs" align="center">
+          <Text size="sm" fw={500}>
+            {totalSelected} selected:
+          </Text>
+          <Text size="sm" c="dimmed" style={{ flex: 1 }}>
+            {displayNames}
+            {hasMore && '...'}
+          </Text>
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={handleOpenOverlay}
+            c="blue"
+          >
+            View All
+          </Button>
+        </Group>
+
+        {/* Level Breakdown Badges */}
+        <Group gap="xs">
+          {(levelBreakdown.major || 0) > 0 && (
+            <Badge size="sm" color="red" variant="dot">
+              {levelBreakdown.major || 0} major
+            </Badge>
+          )}
+          {(levelBreakdown.minor || 0) > 0 && (
+            <Badge size="sm" color="yellow" variant="dot">
+              {levelBreakdown.minor || 0} minor
+            </Badge>
+          )}
+          {(levelBreakdown.patch || 0) > 0 && (
+            <Badge size="sm" color="green" variant="dot">
+              {levelBreakdown.patch || 0} patch
+            </Badge>
+          )}
+        </Group>
+      </Stack>
     );
   };
 
-  // PHASE 4: Check if actions should be enabled
-  const hasSelection = selectionHook.stats.hasSelection;
+  // Get button styling based on admin role and requirements
+  const getButtonState = (action: any) => {
+    const hasRequiredRole = !action.requiresAdmin || isAdmin;
+    const hasRequiredSelection = !action.requiresSelection || selectionHook.stats.hasSelection;
+    const isEnabled = hasRequiredRole && hasRequiredSelection && !isInstalling && !isSyncing;
 
-  // DARK MODE: Get appropriate styling for disabled buttons
-  const getDisabledButtonStyle = (baseColor: string) => {
-    if (hasSelection) {
+    if (isEnabled) {
       return {
         variant: 'filled' as const,
-        color: baseColor,
-        style: {}
+        color: action.color,
+        disabled: false,
+        tooltip: action.description
       };
     }
-    
-    // DARK MODE: Use outline variant with subtle color for better visibility
+
+    // Determine why it's disabled
+    let disabledReason = 'Unknown reason';
+    if (!hasRequiredRole) {
+      disabledReason = 'Administrator privileges required for installation operations';
+    } else if (!hasRequiredSelection) {
+      disabledReason = 'Select items first';
+    } else if (isInstalling || isSyncing) {
+      disabledReason = 'Please wait for current operation to complete';
+    }
+
     return {
       variant: 'outline' as const,
-      color: isDark ? 'gray' : baseColor,
+      color: isDark ? 'gray' : action.color,
+      disabled: true,
+      tooltip: disabledReason,
       style: {
-        borderColor: isDark ? 'var(--mantine-color-gray-6)' : `var(--mantine-color-${baseColor}-3)`,
-        color: isDark ? 'var(--mantine-color-gray-5)' : `var(--mantine-color-${baseColor}-6)`,
+        borderColor: isDark ? 'var(--mantine-color-gray-6)' : `var(--mantine-color-${action.color}-3)`,
+        color: isDark ? 'var(--mantine-color-gray-5)' : `var(--mantine-color-${action.color}-6)`,
         backgroundColor: isDark ? 'var(--mantine-color-dark-6)' : 'var(--mantine-color-gray-0)'
       }
     };
   };
 
-  return (
-    <>
+  // Filter-aligned action icons (positioned next to filter icon)
+  const FilterAlignedIcons = () => (
+    <Group gap="xs">
+      {/* Clear Selection Icon - Styled exactly like filter icon */}
+      <Tooltip label={selectionHook.stats.hasSelection ? "Clear selection" : "No items selected"}>
+        <ActionIcon
+          variant={selectionHook.stats.hasSelection ? 'filled' : 'light'}
+          onClick={selectionHook.clearSelection}
+          size="lg"
+          disabled={!selectionHook.stats.hasSelection || isInstalling || isSyncing}
+          aria-label={selectionHook.stats.hasSelection ? "Clear selection" : "No items selected"}
+        >
+          <IconCheck size={18} />
+        </ActionIcon>
+      </Tooltip>
+
+      {/* Three-Dots Menu - Styled exactly like filter icon */}
+      <Menu shadow="md" width={320}>
+        <Menu.Target>
+          <Tooltip label="Installation actions">
+            <ActionIcon
+              variant="light"
+              size="lg"
+              disabled={isInstalling || isSyncing}
+              aria-label="Installation actions menu"
+            >
+              <IconDots size={18} />
+            </ActionIcon>
+          </Tooltip>
+        </Menu.Target>
+
+        <Menu.Dropdown>
+          <Menu.Label>Installation Actions</Menu.Label>
+          {menuActions.map((action) => {
+            const isEnabled = action.isEnabled();
+            const disabledReason = action.getDisabledReason();
+            
+            return (
+              <Tooltip key={action.id} label={disabledReason} disabled={isEnabled}>
+                <div>
+                  <Menu.Item
+                    leftSection={getActionIcon(action.icon)}
+                    onClick={() => isEnabled ? handleBatchAction(action.id) : undefined}
+                    disabled={!isEnabled}
+                    style={{
+                      opacity: isEnabled ? 1 : 0.6,
+                      cursor: isEnabled ? 'pointer' : 'not-allowed'
+                    }}
+                  >
+                    <Group justify="space-between" w="100%">
+                      <div>
+                        <Text size="sm" fw={500}>
+                          {action.label}
+                        </Text>
+                        <Text size="xs" c="dimmed" style={{ whiteSpace: 'normal' }}>
+                          {action.description}
+                        </Text>
+                      </div>
+                      {isEnabled && action.applicableCount > 0 && (
+                        <Badge size="xs" color={action.color} variant="light">
+                          {action.applicableCount}
+                        </Badge>
+                      )}
+                    </Group>
+                  </Menu.Item>
+                </div>
+              </Tooltip>
+            );
+          })}
+          
+          <Menu.Divider />
+          <Menu.Label>Additional Actions</Menu.Label>
+          <Menu.Item disabled>
+            <Text size="sm" c="dimmed">More actions coming soon...</Text>
+          </Menu.Item>
+        </Menu.Dropdown>
+      </Menu>
+    </Group>
+  );
+
+  // Main actions component (install/sync buttons)
+  const ActionsComponent = () => (
+    <Box w="100%" maw="100%">
       <Stack gap={compactMode ? 'xs' : 'sm'}>
-        {/* Selection Summary */}
+        {/* Enhanced Selection Summary */}
         <SelectionSummary />
 
-        {/* Actions */}
-        <Group gap="md" justify="space-between">
-          {/* Primary Actions - DARK MODE: Enhanced visibility for disabled state */}
-          <Group gap="sm">
-            {primaryActions.map((action) => {
-              const buttonStyle = getDisabledButtonStyle(action.color);
-              
-              return (
-                <Tooltip 
-                  key={action.id}
-                  label={hasSelection ? action.description : 'Select items first'}
-                  disabled={hasSelection}
-                >
-                  <GenericButton
-                    size={compactMode ? 'sm' : 'md'}
-                    {...buttonStyle}
-                    leftSection={getActionIcon(action.icon)}
-                    onClick={() => handleBatchAction(action.id)}
-                    disabled={!hasSelection || batchProgress.active}
-                    loading={batchProgress.active && batchProgress.actionId === action.id}
-                  >
-                    {action.label}
-                    {hasSelection && action.applicableCount !== selectionHook.stats.totalSelected && (
-                      <Badge size="xs" color="white" ml="xs">
-                        {action.applicableCount}
-                      </Badge>
-                    )}
-                  </GenericButton>
-                </Tooltip>
-              );
-            })}
-
-            {/* Secondary Actions Menu - PHASE 4: Only show when selections exist */}
-            {hasSelection && secondaryActions.length > 0 && (
-              <Menu shadow="md" width={280}>
-                <Menu.Target>
-                  <ActionIcon
-                    size={compactMode ? 'sm' : 'lg'}
-                    variant="light"
-                    color="gray"
-                    disabled={batchProgress.active}
-                  >
-                    <IconDots size={16} />
-                  </ActionIcon>
-                </Menu.Target>
-
-                <Menu.Dropdown>
-                  <Menu.Label>Additional Actions</Menu.Label>
-                  {secondaryActions.map((action) => (
-                    <Menu.Item
-                      key={action.id}
-                      leftSection={getActionIcon(action.icon)}
-                      onClick={() => handleBatchAction(action.id)}
-                    >
-                      <div>
-                        <Text fw={500}>{action.label}</Text>
-                        <Text size="xs" c="dimmed">{action.description}</Text>
-                        {action.applicableCount !== selectionHook.stats.totalSelected && (
-                          <Badge size="xs" color={action.color} mt={2}>
-                            {action.applicableCount} applicable
-                          </Badge>
-                        )}
-                      </div>
-                    </Menu.Item>
-                  ))}
-                </Menu.Dropdown>
-              </Menu>
-            )}
-          </Group>
-
-          {/* Selection Actions - Only show when selection exists */}
-          {hasSelection && (
-            <Group gap="sm">
-              <Tooltip label="Clear selection">
-                <ActionIcon
-                  variant="subtle"
-                  color="gray"
-                  onClick={selectionHook.clearSelection}
+        {/* Primary Install/Sync Actions */}
+        <Group gap="sm" w="100%">
+          {primaryActions.map((action) => {
+            const buttonState = getButtonState(action);
+            
+            return (
+              <Tooltip 
+                key={action.id}
+                label={buttonState.tooltip}
+              >
+                <GenericButton
                   size={compactMode ? 'sm' : 'md'}
+                  variant={buttonState.variant}
+                  color={buttonState.color}
+                  leftSection={getActionIcon(action.icon)}
+                  onClick={() => handleBatchAction(action.id)}
+                  disabled={buttonState.disabled}
+                  loading={isInstalling && action.id.includes('install')}
+                  style={buttonState.style}
                 >
-                  <IconCheck size={14} />
-                </ActionIcon>
+                  {action.label}
+                  {!buttonState.disabled && action.applicableCount > 0 && (
+                    <Badge 
+                      size="xs" 
+                      ml="xs"
+                      variant="transparent"
+                      style={{ 
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        color: 'inherit'
+                      }}
+                    >
+                      {action.applicableCount}
+                    </Badge>
+                  )}
+                </GenericButton>
               </Tooltip>
-            </Group>
-          )}
+            );
+          })}
+
+          {/* Sync Applications Button */}
+          <Tooltip label="Synchronize applications from the store">
+            <GenericButton
+              size={compactMode ? 'sm' : 'md'}
+              variant="light"
+              leftSection={<IconRefresh size={16} />}
+              onClick={handleSyncApplications}
+              disabled={isInstalling || isSyncing}
+              loading={isSyncing}
+            >
+              Sync Applications
+            </GenericButton>
+          </Tooltip>
         </Group>
 
-        {/* Batch Progress */}
-        {batchProgress.active && (
+        {/* Batch/Sync Progress */}
+        {(isInstalling || isSyncing) && (
           <Alert color="blue" variant="light">
             <Stack gap="xs">
               <Group justify="space-between">
-                <Text size="sm" fw={500}>Batch Operation in Progress</Text>
-                <Text size="xs" c="dimmed">{Math.round(batchProgress.progress)}%</Text>
+                <Text size="sm" fw={500}>
+                  {isSyncing ? 'Sync in Progress' : 'Installation in Progress'}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {isSyncing ? '100%' : `${Math.round(progress)}%`}
+                </Text>
               </Group>
-              <Progress value={batchProgress.progress} size="sm" animated />
-              <Text size="xs" c="dimmed">{batchProgress.message}</Text>
+              <Progress 
+                value={isSyncing ? 100 : progress} 
+                size="sm" 
+                animated={isSyncing}
+              />
+              <Text size="xs" c="dimmed">
+                {isSyncing ? 'Syncing applications from store...' : message}
+              </Text>
             </Stack>
           </Alert>
         )}
       </Stack>
 
-      {/* Confirmation Modal */}
+      {/* Selected Items Overlay */}
+      <SelectedItemsOverlay
+        opened={isOverlayOpen}
+        onClose={handleCloseOverlay}
+        selectionHook={selectionHook}
+      />
+
+      {/* Confirmation Modal - ARCHITECTURE: State from custom hook */}
       <Modal
         opened={confirmationModal.open}
-        onClose={() => setConfirmationModal(prev => ({ ...prev, open: false }))}
-        title="Confirm Batch Action"
+        onClose={hideConfirmationModal}
+        title="Confirm Installation"
         size="md"
       >
         <Stack gap="md">
@@ -433,11 +823,11 @@ export const StoreUpdatesActions: React.FC<StoreUpdatesActionsProps> = ({
               Are you sure you want to {confirmationModal.actionLabel.toLowerCase()}?
             </Text>
             <Text size="sm">
-              This action will affect {confirmationModal.selectedCount} selected update{confirmationModal.selectedCount !== 1 ? 's' : ''}.
+              This will install {confirmationModal.selectedCount} selected update{confirmationModal.selectedCount !== 1 ? 's' : ''} using the ServiceNow subflow.
             </Text>
           </Alert>
 
-          {/* Selection breakdown - FIXED: Safe null access with fallbacks */}
+          {/* Selection breakdown */}
           <div>
             <Text size="sm" fw={500} mb="xs">Selection Summary:</Text>
             <Group gap="xs">
@@ -457,23 +847,36 @@ export const StoreUpdatesActions: React.FC<StoreUpdatesActionsProps> = ({
 
           <Group justify="flex-end" gap="sm">
             <Button
-              variant="subtle"
-              onClick={() => setConfirmationModal(prev => ({ ...prev, open: false }))}
+              variant="light"
+              onClick={hideConfirmationModal}
+              disabled={isInstalling}
             >
               Cancel
             </Button>
             <Button
               color="blue"
-              onClick={handleConfirmAction}
-              loading={batchProgress.active}
+              onClick={handleConfirmInstallation}
+              loading={isInstalling}
+              leftSection={<IconDownload size={16} />}
             >
-              Confirm Action
+              Start Installation
             </Button>
           </Group>
         </Stack>
       </Modal>
-    </>
+    </Box>
   );
+
+  return {
+    ActionsComponent,
+    FilterAlignedIcons
+  };
 };
 
-export default StoreUpdatesActions;
+export default useStoreUpdatesActions;
+
+// Legacy component export for backward compatibility
+export const StoreUpdatesActions: React.FC<StoreUpdatesActionsProps> = (props) => {
+  const { ActionsComponent } = useStoreUpdatesActions(props);
+  return <ActionsComponent />;
+};

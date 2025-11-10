@@ -1,190 +1,148 @@
 // src/error/ErrorBoundary.tsx
-// Enterprise-grade error boundary following Architecture.md specifications
-// FIXED: No Mantine dependencies to avoid provider timing issues
+// Enhanced error boundary following your documented patterns
+// Implements strategic error boundary placement from core-principles.md
 
-import * as React from 'react';
+import React, { Component, ReactNode } from 'react';
 import { logger, createLogContext } from '../monitoring/logger';
+import { getString } from '../utils/typeRefinements';
+
+export interface ErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+  errorInfo?: React.ErrorInfo;
+  errorId?: string;
+}
 
 interface Props {
-  children: React.ReactNode;
-  fallback?: (error: Error, resetErrorBoundary: () => void) => React.ReactNode;
+  children: ReactNode;
+  fallback?: React.ComponentType<ErrorBoundaryState & { onRetry: () => void }>;
+  level?: 'app' | 'feature' | 'component';
+  name?: string;
 }
 
-interface State {
-  hasError: boolean;
-  error: Error | null;
-  errorInfo: React.ErrorInfo | null;
-}
+// ServiceNow-specific error fallback component
+const ServiceNowErrorFallback: React.FC<ErrorBoundaryState & { onRetry: () => void }> = ({ 
+  error, 
+  onRetry, 
+  errorId 
+}) => {
+  const errorMessage = error?.message ?? '';
+  const isAuthError = errorMessage.includes('authentication') || errorMessage.includes('401');
+  const isPermissionError = errorMessage.includes('403') || errorMessage.includes('permission');
+  const isNetworkError = errorMessage.includes('network') || errorMessage.includes('fetch');
 
-export class EnterpriseErrorBoundary extends React.Component<Props, State> {
+  return (
+    <div className="error-boundary-fallback" style={{ 
+      padding: '2rem', 
+      textAlign: 'center',
+      border: '2px solid #ff6b6b',
+      borderRadius: '8px',
+      backgroundColor: '#fff5f5',
+      margin: '1rem'
+    }}>
+      <h2 style={{ color: '#d63031', marginBottom: '1rem' }}>
+        {isAuthError ? '🔐 Authentication Required' : 
+         isPermissionError ? '🚫 Access Denied' : 
+         isNetworkError ? '🌐 Network Error' :
+         '⚠️ Something went wrong'}
+      </h2>
+      
+      <p style={{ color: '#636e72', marginBottom: '1.5rem' }}>
+        {isAuthError ? 'Your session may have expired. Please refresh to log in again.' :
+         isPermissionError ? 'You don\'t have permission to perform this action.' :
+         isNetworkError ? 'Unable to connect to ServiceNow. Please check your connection.' :
+         'An unexpected error occurred. Our team has been notified.'}
+      </p>
+      
+      {errorId && (
+        <p style={{ fontSize: '0.875rem', color: '#636e72', marginBottom: '1rem' }}>
+          Error ID: {errorId}
+        </p>
+      )}
+      
+      <button
+        onClick={onRetry}
+        style={{
+          backgroundColor: '#0984e3',
+          color: 'white',
+          border: 'none',
+          padding: '0.75rem 1.5rem',
+          borderRadius: '4px',
+          cursor: 'pointer',
+          fontSize: '1rem'
+        }}
+        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#74b9ff'}
+        onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#0984e3'}
+      >
+        {isAuthError ? '🔄 Refresh & Login' : 
+         isNetworkError ? '🔄 Retry Connection' :
+         '🔄 Try Again'}
+      </button>
+    </div>
+  );
+};
+
+export class ErrorBoundary extends Component<Props, ErrorBoundaryState> {
   constructor(props: Props) {
     super(props);
-    this.state = {
-      hasError: false,
-      error: null,
-      errorInfo: null
-    };
+    this.state = { hasError: false };
   }
 
-  public static getDerivedStateFromError(error: Error): State {
-    // Update state so the next render will show the fallback UI
-    return { 
-      hasError: true, 
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    const errorId = `ERR_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    return {
+      hasError: true,
       error,
-      errorInfo: null 
+      errorId
     };
   }
 
-  public componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Log error with comprehensive context
-    logger.error('Enhanced error boundary triggered', error, createLogContext({
-      componentStack: errorInfo.componentStack,
-      errorBoundary: 'EnterpriseErrorBoundary',
-      errorName: error.name,
-      errorMessage: error.message,
-      errorStack: error.stack
+  override componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    const errorId = this.state.errorId ?? `ERR_${Date.now()}`;
+    const componentStack = getString(errorInfo?.componentStack, '');
+    
+    // Log error with ServiceNow context
+    logger.error('Error Boundary caught error', error, createLogContext({
+      errorBoundary: this.props.name ?? 'Unknown',
+      level: this.props.level ?? 'component',
+      errorId,
+      componentStack,
+      errorInfo: componentStack.split('\n').slice(0, 5).join('\n') // First 5 lines only
     }));
 
     this.setState({
+      hasError: true,
       error,
-      errorInfo
+      errorInfo,
+      errorId
     });
   }
 
-  private resetErrorBoundary = (): void => {
-    this.setState({
-      hasError: false,
-      error: null,
-      errorInfo: null
+  handleRetry = () => {
+    logger.info('Error boundary retry attempted', createLogContext({
+      errorBoundary: this.props.name ?? 'Unknown',
+      level: this.props.level ?? 'component',
+      errorId: this.state.errorId ?? 'unknown'
+    }));
+
+    this.setState({ 
+      hasError: false, 
+      error: undefined, 
+      errorInfo: undefined, 
+      errorId: undefined 
     });
   };
 
-  private reportError = (): void => {
-    const { error } = this.state;
-    if (error) {
-      logger.error('User reported error', error, createLogContext({
-        userReported: true,
-        reportedAt: new Date().toISOString()
-      }));
-
-      // Simple alert since we can't use Mantine notifications here
-      alert('Error reported! Thank you. The development team has been notified.');
-    }
-  };
-
-  public render(): React.ReactNode {
+  override render() {
     if (this.state.hasError) {
-      // Custom fallback UI if provided
-      if (this.props.fallback) {
-        return this.props.fallback(this.state.error!, this.resetErrorBoundary);
-      }
-
-      // Default enterprise error UI using plain HTML/CSS (no Mantine dependencies)
-      const containerStyle: React.CSSProperties = {
-        maxWidth: '600px',
-        margin: '2rem auto',
-        padding: '2rem',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        backgroundColor: '#fff',
-        border: '1px solid #e9ecef',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
-      };
-
-      const alertStyle: React.CSSProperties = {
-        padding: '1rem',
-        backgroundColor: '#ffebee',
-        border: '1px solid #ffcdd2',
-        borderRadius: '4px',
-        marginBottom: '1rem'
-      };
-
-      const buttonStyle: React.CSSProperties = {
-        padding: '0.5rem 1rem',
-        margin: '0.25rem',
-        border: '1px solid #228be6',
-        borderRadius: '4px',
-        backgroundColor: '#228be6',
-        color: 'white',
-        cursor: 'pointer',
-        fontSize: '14px',
-        fontFamily: 'inherit'
-      };
-
-      const outlineButtonStyle: React.CSSProperties = {
-        ...buttonStyle,
-        backgroundColor: 'transparent',
-        color: '#228be6'
-      };
-
+      const FallbackComponent = this.props.fallback ?? ServiceNowErrorFallback;
+      
       return (
-        <div style={containerStyle}>
-          <div style={alertStyle}>
-            <h3 style={{ margin: '0 0 1rem 0', color: '#d32f2f' }}>🐛 Application Error</h3>
-            <p style={{ margin: '0 0 1rem 0', fontSize: '14px' }}>
-              An unexpected error occurred in the application. Our development team has been automatically notified.
-            </p>
-            
-            {process.env.NODE_ENV === 'development' && this.state.error && (
-              <div style={{ marginTop: '1rem' }}>
-                <strong style={{ fontSize: '12px', color: '#d32f2f' }}>Development Details:</strong>
-                <pre style={{ 
-                  fontSize: '11px', 
-                  color: '#d32f2f', 
-                  backgroundColor: '#fafafa', 
-                  padding: '0.5rem',
-                  borderRadius: '2px',
-                  overflow: 'auto',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-all'
-                }}>
-                  {this.state.error.message}
-                  {this.state.error.stack && `\n${this.state.error.stack.slice(0, 500)}...`}
-                </pre>
-              </div>
-            )}
-            
-            <div style={{ marginTop: '1rem' }}>
-              <button 
-                style={buttonStyle}
-                onClick={this.resetErrorBoundary}
-              >
-                🔄 Try Again
-              </button>
-              
-              <button 
-                style={outlineButtonStyle}
-                onClick={this.reportError}
-              >
-                📋 Report Issue
-              </button>
-              
-              <button 
-                style={{...outlineButtonStyle, color: '#666', borderColor: '#666'}}
-                onClick={() => window.location.reload()}
-              >
-                🔃 Reload Page
-              </button>
-            </div>
-          </div>
-
-          <div style={{ ...alertStyle, backgroundColor: '#e3f2fd', borderColor: '#bbdefb' }}>
-            <strong style={{ fontSize: '14px' }}>What happened?</strong>
-            <p style={{ margin: '0.5rem 0 0 0', fontSize: '14px' }}>
-              A component in the application encountered an unexpected error. 
-              This could be due to a network issue, browser compatibility, or a temporary system problem.
-            </p>
-          </div>
-
-          <div style={{ ...alertStyle, backgroundColor: '#fff3e0', borderColor: '#ffcc02' }}>
-            <strong style={{ fontSize: '14px' }}>What to try:</strong>
-            <ul style={{ margin: '0.5rem 0', paddingLeft: '20px', fontSize: '14px' }}>
-              <li>Click "Try Again" to attempt recovery</li>
-              <li>Refresh your browser if the problem persists</li>
-              <li>Report the issue if you continue experiencing problems</li>
-            </ul>
-          </div>
-        </div>
+        <FallbackComponent 
+          {...this.state}
+          onRetry={this.handleRetry}
+        />
       );
     }
 
@@ -192,23 +150,39 @@ export class EnterpriseErrorBoundary extends React.Component<Props, State> {
   }
 }
 
-// Enhanced Error Boundary with custom fallback support
-export const ErrorBoundary: React.FC<{ 
-  children: React.ReactNode;
-  fallbackRender?: (props: { error: Error; resetErrorBoundary: () => void }) => React.ReactNode;
-}> = ({ children, fallbackRender }) => {
-  return (
-    <EnterpriseErrorBoundary
-      fallback={fallbackRender ? (error, reset) => fallbackRender({ error, resetErrorBoundary: reset }) : undefined}
-    >
-      {children}
-    </EnterpriseErrorBoundary>
-  );
-};
+// Specialized error boundaries for different app levels
+export const AppErrorBoundary: React.FC<{ children: ReactNode }> = ({ children }) => (
+  <ErrorBoundary 
+    level="app" 
+    name="ApplicationRoot"
+    fallback={ServiceNowErrorFallback}
+  >
+    {children}
+  </ErrorBoundary>
+);
 
-// Utility function for manually triggering error boundary
-export const triggerErrorBoundary = (error: Error): void => {
-  throw error;
-};
+export const FeatureErrorBoundary: React.FC<{ 
+  children: ReactNode; 
+  featureName?: string;
+}> = ({ children, featureName }) => (
+  <ErrorBoundary 
+    level="feature" 
+    name={featureName ?? 'Feature'}
+    fallback={ServiceNowErrorFallback}
+  >
+    {children}
+  </ErrorBoundary>
+);
 
-export default EnterpriseErrorBoundary;
+export const ComponentErrorBoundary: React.FC<{ 
+  children: ReactNode; 
+  componentName?: string;
+}> = ({ children, componentName }) => (
+  <ErrorBoundary 
+    level="component" 
+    name={componentName ?? 'Component'}
+    fallback={ServiceNowErrorFallback}
+  >
+    {children}
+  </ErrorBoundary>
+);

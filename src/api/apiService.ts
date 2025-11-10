@@ -2,6 +2,7 @@
 // Type-safe API client with advanced error handling and comprehensive ServiceNow integration
 // Following Architecture.md Section 6 specifications
 // DEBUG: Added logging to getTableRecords method
+// INSTALL UPDATES: Added installUpdates method for batch operations
 
 import { logger, createLogContext } from '../monitoring/logger';
 import type {
@@ -13,13 +14,31 @@ import type {
   PerformanceMetrics,
   RequestInterceptor
 } from '../types/api';
+import { createApiRequestConfig, createPerformanceMetrics, createRequestInterceptor } from '../types/api';
+
+// Install Updates API types
+interface InstallUpdatesRequest {
+  apps: string; // Comma-separated sys_ids
+}
+
+interface InstallUpdatesResponse {
+  success: boolean;
+  progress_id: string;
+  status_message: string;
+  app_count: number;
+  apps_requested: string;
+  timestamp: string;
+}
+
+interface InstallUpdatesErrorResponse {
+  success: false;
+  error: string;
+  message: string;
+  timestamp: string;
+}
 
 interface InternalRequestConfig extends ApiRequestConfig {
   url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  timeout: number;
-  retries: number;
-  retryDelay: number;
 }
 
 class ServiceNowApiService {
@@ -44,8 +63,9 @@ class ServiceNowApiService {
 
   private setupDefaultInterceptors(): void {
     // Request interceptor for authentication and tracking
-    this.addInterceptor({
-      id: 'default-request',
+    this.addInterceptor(createRequestInterceptor('default-request', {
+      enabled: true,
+      order: 0,
       onRequest: (config) => {
         // Add ServiceNow session authentication
         const headers = {
@@ -90,7 +110,7 @@ class ServiceNowApiService {
         );
         return error;
       }
-    });
+    }));
   }
 
   private getSessionToken(): string {
@@ -141,7 +161,7 @@ class ServiceNowApiService {
 
   private async performRequest<T = any>(
     url: string,
-    config: ApiRequestConfig = {}
+    config: Partial<ApiRequestConfig> = {}
   ): Promise<ApiResponse<T>> {
     const requestId = this.generateRequestId();
     const startTime = performance.now();
@@ -150,19 +170,17 @@ class ServiceNowApiService {
     let fullUrl = url.startsWith('http') ? url : `${this.baseUrl}${url}`;
     fullUrl = this.buildUrlWithParams(fullUrl, config.params);
     
+    // Create complete config with defaults
+    const baseConfig = createApiRequestConfig(config);
     const requestConfig: InternalRequestConfig = {
-      method: 'GET',
-      timeout: 10000,
-      retries: 2,
-      retryDelay: 1000,
-      ...config,
+      ...baseConfig,
       url: fullUrl
     };
 
     // Apply request interceptors
     let processedConfig = requestConfig;
     for (const interceptor of this.interceptors) {
-      if (interceptor.onRequest) {
+      if (interceptor.enabled && interceptor.onRequest) {
         processedConfig = interceptor.onRequest(processedConfig) as InternalRequestConfig;
       }
     }
@@ -178,7 +196,7 @@ class ServiceNowApiService {
         // Apply response interceptors
         let processedResponse = response;
         for (const interceptor of this.interceptors) {
-          if (interceptor.onResponse) {
+          if (interceptor.enabled && interceptor.onResponse) {
             processedResponse = interceptor.onResponse(processedResponse);
           }
         }
@@ -186,16 +204,19 @@ class ServiceNowApiService {
         // Record performance metrics
         const endTime = performance.now();
         const duration = endTime - startTime;
-        this.recordPerformanceMetric({
+        this.recordPerformanceMetric(createPerformanceMetrics(
           requestId,
-          url: fullUrl,
-          method: processedConfig.method,
+          fullUrl,
+          processedConfig.method,
           startTime,
           endTime,
-          duration,
-          success: true,
-          retryCount,
-        });
+          {
+            success: true,
+            retryCount,
+            cacheHit: false,
+            size: 0 // Could be calculated from response
+          }
+        ));
 
         // Check for slow requests
         if (duration > this.slowRequestThreshold) {
@@ -215,7 +236,7 @@ class ServiceNowApiService {
         
         // Apply error interceptors
         for (const interceptor of this.interceptors) {
-          if (interceptor.onError) {
+          if (interceptor.enabled && interceptor.onError) {
             lastError = await Promise.resolve(interceptor.onError(lastError));
           }
         }
@@ -242,17 +263,20 @@ class ServiceNowApiService {
     // Record failed request metrics
     const endTime = performance.now();
     const duration = endTime - startTime;
-    this.recordPerformanceMetric({
+    this.recordPerformanceMetric(createPerformanceMetrics(
       requestId,
-      url: fullUrl,
-      method: processedConfig.method,
+      fullUrl,
+      processedConfig.method,
       startTime,
       endTime,
-      duration,
-      success: false,
-      retryCount,
-      error: lastError?.message || 'Unknown error'
-    });
+      {
+        success: false,
+        retryCount,
+        error: lastError?.message || 'Unknown error',
+        cacheHit: false,
+        size: 0
+      }
+    ));
 
     throw lastError;
   }
@@ -303,20 +327,30 @@ class ServiceNowApiService {
     const apiError = new Error(error.message || 'API request failed') as ApiError;
     apiError.name = 'ApiError';
     apiError.code = error.code || 'UNKNOWN_ERROR';
-    apiError.status = error.status;
-    apiError.request = {
+    apiError.status = error.status || 0;
+    apiError.timestamp = new Date().toISOString();
+
+    // Create immutable copies for the readonly properties
+    const requestCopy = {
       url: config.url,
       method: config.method,
-      data: config.data
+      data: config.data,
+      headers: config.headers
     };
 
     if (error.response) {
-      apiError.response = {
+      const responseCopy = {
         data: error.response.data,
         status: error.response.status,
-        statusText: error.response.statusText
+        statusText: error.response.statusText,
+        headers: error.response.headers || {}
       };
+      // Assign to the error after creating immutable copy
+      (apiError as any).response = responseCopy;
     }
+
+    // Assign request after creating immutable copy
+    (apiError as any).request = requestCopy;
 
     return apiError;
   }
@@ -340,23 +374,23 @@ class ServiceNowApiService {
     this.interceptors = this.interceptors.filter(i => i.id !== id);
   }
 
-  public async get<T = any>(url: string, config?: Omit<ApiRequestConfig, 'method'>): Promise<ApiResponse<T>> {
+  public async get<T = any>(url: string, config?: Partial<ApiRequestConfig>): Promise<ApiResponse<T>> {
     return this.performRequest<T>(url, { ...config, method: 'GET' });
   }
 
-  public async post<T = any>(url: string, data?: any, config?: Omit<ApiRequestConfig, 'method' | 'data'>): Promise<ApiResponse<T>> {
+  public async post<T = any>(url: string, data?: any, config?: Partial<ApiRequestConfig>): Promise<ApiResponse<T>> {
     return this.performRequest<T>(url, { ...config, method: 'POST', data });
   }
 
-  public async put<T = any>(url: string, data?: any, config?: Omit<ApiRequestConfig, 'method' | 'data'>): Promise<ApiResponse<T>> {
+  public async put<T = any>(url: string, data?: any, config?: Partial<ApiRequestConfig>): Promise<ApiResponse<T>> {
     return this.performRequest<T>(url, { ...config, method: 'PUT', data });
   }
 
-  public async patch<T = any>(url: string, data?: any, config?: Omit<ApiRequestConfig, 'method' | 'data'>): Promise<ApiResponse<T>> {
+  public async patch<T = any>(url: string, data?: any, config?: Partial<ApiRequestConfig>): Promise<ApiResponse<T>> {
     return this.performRequest<T>(url, { ...config, method: 'PATCH', data });
   }
 
-  public async delete<T = any>(url: string, config?: Omit<ApiRequestConfig, 'method'>): Promise<ApiResponse<T>> {
+  public async delete<T = any>(url: string, config?: Partial<ApiRequestConfig>): Promise<ApiResponse<T>> {
     return this.performRequest<T>(url, { ...config, method: 'DELETE' });
   }
 
@@ -404,7 +438,10 @@ class ServiceNowApiService {
     
     return {
       result: response.result || [],
-      // Note: ServiceNow API doesn't always return total/count, would need additional logic
+      total: 0,
+      count: (response.result || []).length,
+      offset: offset || 0,
+      limit: limit || 100
     };
   }
 
@@ -439,6 +476,60 @@ class ServiceNowApiService {
   public async deleteRecord(table: string, sysId: string): Promise<ApiResponse<void>> {
     const url = `/api/now/table/${table}/${sysId}`;
     return this.delete(url);
+  }
+
+  // INSTALL UPDATES: ServiceNow Store Updates specific method
+  public async installUpdates(apps: string[]): Promise<InstallUpdatesResponse> {
+    const startTime = performance.now();
+    
+    logger.info('Installing updates via service layer', createLogContext({
+      appCount: apps.length,
+      apps: apps.join(',')
+    }));
+
+    try {
+      const requestData: InstallUpdatesRequest = {
+        apps: apps.join(',')
+      };
+
+      const response = await this.post<InstallUpdatesResponse | InstallUpdatesErrorResponse>(
+        `/api/x_snc_store_upda_1/install_updates`,
+        requestData
+      );
+
+      const result = response.result;
+      
+      if (!result.success) {
+        const errorResult = result as InstallUpdatesErrorResponse;
+        throw new Error(`Install Updates API error: ${errorResult.error} - ${errorResult.message}`);
+      }
+
+      const successResult = result as InstallUpdatesResponse;
+      const duration = performance.now() - startTime;
+
+      logger.info('Install updates completed successfully', createLogContext({
+        progressId: successResult.progress_id,
+        appCount: successResult.app_count,
+        statusMessage: successResult.status_message,
+        duration: Math.round(duration)
+      }));
+
+      return successResult;
+
+    } catch (error) {
+      const duration = performance.now() - startTime;
+      
+      logger.error('Install updates failed', 
+        error instanceof Error ? error : new Error(String(error)),
+        createLogContext({
+          appCount: apps.length,
+          apps: apps.join(','),
+          duration: Math.round(duration)
+        })
+      );
+
+      throw error;
+    }
   }
 
   // Parallel processing utilities

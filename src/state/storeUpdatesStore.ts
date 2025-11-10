@@ -85,6 +85,9 @@ export interface StoreUpdatesState {
   // Dual-Source Hybrid Statistics (NEW - Architecture.md Section 4.5)
   statistics: StoreUpdatesStatistics;
   
+  // NEW: Track if data-changing actions have been performed
+  hasPerformedDataActions: boolean;
+  
   // Actions (Section 5: ServiceNow Integration)
   actions: {
     // Server data sync (Pattern 2C integration)
@@ -95,6 +98,9 @@ export interface StoreUpdatesState {
     setImmediateStats: (quickStats: any, userContext?: any) => void;
     updateCalculatedStats: () => void;
     refreshHybridStats: (selectedCount?: number) => void;
+    
+    // NEW: Mark that data-changing actions have been performed
+    markDataActionsPerformed: () => void;
     
     // Client-side filtering (Section 5: Advanced Filtering) - SIMPLIFIED
     setSearch: (search: string) => void;
@@ -276,6 +282,7 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
       totalFiltered: 0,
       totalPages: 1,
       statistics: createDefaultStatistics(),
+      hasPerformedDataActions: false, // NEW: Track data-changing actions
 
       actions: {
         // Pattern 2C: Sync server data from TanStack Query
@@ -375,7 +382,7 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
           get().actions.refreshHybridStats();
         },
 
-        // Pattern 2C: Calculate statistics from server data
+        // Pattern 2C: Calculate statistics from server data  
         updateCalculatedStats: () => {
           const state = get();
           const records = state.allRecords;
@@ -384,23 +391,26 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
             return; // No data to calculate from
           }
 
+          // FIXED: Calculate the same way as Pattern 2A - count applications by level, not sum update counts
           const calculatedStats = {
             totalApplications: records.length,
-            totalMajorUpdates: records.reduce((sum, record) => sum + safeParseInt(record.major_count), 0),
-            totalMinorUpdates: records.reduce((sum, record) => sum + safeParseInt(record.minor_count), 0),
-            totalPatchUpdates: records.reduce((sum, record) => sum + safeParseInt(record.patch_count), 0),
+            // Count applications by their 'level' field (same as Pattern 2A)
+            totalMajorUpdates: records.filter(record => record.level === 'major').length,
+            totalMinorUpdates: records.filter(record => record.level === 'minor').length,
+            totalPatchUpdates: records.filter(record => record.level === 'patch').length,
             source: 'pattern-2c-calculated' as const,
             timestamp: Date.now()
           };
 
-          logger.info('Updating Pattern 2C calculated statistics', createLogContext({
-            pattern: '2c-calculated-stats',
+          logger.info('Updating Pattern 2C calculated statistics (FIXED: Count by level, not sum counts)', createLogContext({
+            pattern: '2c-calculated-stats-fixed',
             totalApplications: calculatedStats.totalApplications,
             totalMajorUpdates: calculatedStats.totalMajorUpdates,
             totalMinorUpdates: calculatedStats.totalMinorUpdates,
             totalPatchUpdates: calculatedStats.totalPatchUpdates,
             sourceRecords: records.length,
-            fixApplied: 'safeParseInt-numeric-conversion'
+            calculationMethod: 'count-by-level-field',
+            fixApplied: 'match-pattern-2a-calculation'
           }));
 
           set(state => ({
@@ -414,35 +424,51 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
           get().actions.refreshHybridStats();
         },
 
-        // FIXED: Hybrid decision logic - Pattern 2A preferred by default (zero loading states)
+        // CORRECTED: Context-aware hybrid logic - Pattern 2A until data actions, then Pattern 2C
         refreshHybridStats: (selectedCount?: number) => {
           const state = get();
           const { immediateStats, calculatedStats } = state.statistics;
 
-          // FIXED: Calculate critical count using actual batch_level values (major/minor/patch)
-          // Since none of our current data has 'critical' as a batch_level, count 'major' as most critical
+          // Calculate critical count using actual batch_level values
           const criticalCount = state.filteredRecords.filter(record => 
-            record.batch_level === 'major' // FIXED: Use 'major' instead of 'critical'
+            record.batch_level === 'major'
           ).length;
           
           const currentlyShown = state.paginatedRecords.length;
           const finalSelectedCount = selectedCount ?? state.statistics.activeStats.selectedCount;
 
-          // FIXED: Pattern 2A preferred by default (original design principle)
+          // Hybrid decision logic variables
           const isCalculatedAvailable = calculatedStats !== null;
           const calculatedCorruption = isCalculatedAvailable ? hasStringCorruption(calculatedStats) : true;
           const significantDiff = isCalculatedAvailable ? 
             hasSignificantDifference(immediateStats, calculatedStats) : false;
 
-          // FIXED: Only use Pattern 2C when:
-          // 1. No corruption detected
-          // 2. NO significant difference (data sources must agree)
-          // 3. Has valid calculated data  
-          // DEFAULT: Always prefer Pattern 2A (zero loading states principle)
-          const useCalculated = isCalculatedAvailable && 
-            !calculatedCorruption &&
-            !significantDiff &&  // CRITICAL: Don't use Pattern 2C when sources disagree
-            (calculatedStats.totalMajorUpdates + calculatedStats.totalMinorUpdates + calculatedStats.totalPatchUpdates) > 0;
+          // CORRECTED: Context-aware hybrid logic
+          let useCalculated = false;
+          let reason = 'initial-load-prefer-2a';
+
+          if (state.hasPerformedDataActions) {
+            // After data actions: prefer Pattern 2C (API data reflects changes)
+            if (isCalculatedAvailable && !calculatedCorruption) {
+              useCalculated = true;
+              reason = 'post-action-prefer-2c';
+            } else {
+              reason = 'post-action-fallback-to-2a';
+            }
+          } else {
+            // Initial load: prefer Pattern 2A (server-injected data is correct)
+            // Only use Pattern 2C if Pattern 2A data is invalid
+            if (!immediateStats || immediateStats.totalApplications === 0) {
+              if (isCalculatedAvailable && !calculatedCorruption) {
+                useCalculated = true;
+                reason = 'initial-2a-unavailable-use-2c';
+              } else {
+                reason = 'initial-2a-unavailable-no-fallback';
+              }
+            } else {
+              reason = 'initial-load-prefer-2a';
+            }
+          }
 
           const sourceStats = useCalculated ? calculatedStats : immediateStats;
 
@@ -461,10 +487,12 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
             hasStringCorruption: calculatedCorruption
           } as const;
 
-          logger.info('Refreshing hybrid statistics decision (FIXED: Pattern 2A Default + Critical Count)', createLogContext({
-            pattern: 'hybrid-stats-decision',
+          logger.info('Context-aware hybrid statistics decision', createLogContext({
+            pattern: 'hybrid-stats-context-aware',
             sourceUsed: activeStats.source,
             isCalculatedPreferred: activeStats.isCalculatedPreferred,
+            hasPerformedDataActions: state.hasPerformedDataActions,
+            decisionReason: reason,
             hasSignificantDifference: activeStats.hasSignificantDifference,
             hasStringCorruption: activeStats.hasStringCorruption,
             criticalCount: activeStats.criticalCount,
@@ -474,7 +502,18 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
               patch: activeStats.totalPatchUpdates,
               applications: activeStats.totalApplications
             },
-            fixApplied: 'pattern-2a-default-preference-and-critical-count-fix'
+            pattern2AData: immediateStats ? {
+              total: immediateStats.totalApplications,
+              major: immediateStats.totalMajorUpdates,
+              minor: immediateStats.totalMinorUpdates,
+              patch: immediateStats.totalPatchUpdates
+            } : null,
+            pattern2CData: calculatedStats ? {
+              total: calculatedStats.totalApplications,
+              major: calculatedStats.totalMajorUpdates,
+              minor: calculatedStats.totalMinorUpdates,
+              patch: calculatedStats.totalPatchUpdates
+            } : null
           }));
 
           set(state => ({
@@ -539,6 +578,19 @@ export const useStoreUpdatesStore = create<StoreUpdatesState>()(
           });
           get().actions.applyFiltersAndPagination();
           get().actions.refreshHybridStats(); // Update stats after clearing filters
+        },
+
+        // NEW: Mark that data-changing actions have been performed
+        markDataActionsPerformed: () => {
+          logger.info('Marking data actions as performed - Pattern 2C will now be preferred', createLogContext({
+            pattern: 'data-actions-performed',
+            previousState: get().hasPerformedDataActions
+          }));
+          
+          set({ hasPerformedDataActions: true });
+          
+          // Refresh hybrid stats to switch to Pattern 2C
+          get().actions.refreshHybridStats();
         },
 
         // Section 5: Performance Optimization with proper validation

@@ -55,11 +55,20 @@ This pattern guide is part of a strategic three-tier documentation architecture:
 
 ---
 
-## 🚨 CRITICAL: Build Agent Implementation Directive
+## 🚨 CRITICAL: Build Agent Implementation Directives
 
 ### **💯 Conservative Development Process**
 
 **PATTERN:** Apply changes in small, atomic, reversible increments during development. Be ambitious with functionality, conservative with implementation approach.
+
+**PACKAGE MANAGEMENT:** Always add packages with '^version' where version is the latest stable build to ensure maximum compatibility and feature access.
+
+**IMPORT USING RELATIVE PATH:** Don't use '@/api/' imports for components, utilies, hooks etc. Configure correct relative imports to succesfully run a build.
+
+**CDN RESOURCE VALIDATION:** When using external resources from a CDN (like stylesheets), ALWAYS show the resources used in debug version (debug implemented using URL parameter sn_debug=true) and ask the user to VALIDATE by clicking the resource. This is CRITICAL to prevent styling problems with incorrect resources.
+
+**DEBUG SWITCH:** NEVER use NODE_ENV as this is not set on ServiceNow. We ALWAYS have to use a URL paramter based debug setup. NEVER use ?DEBUG=true or ?debug=true, this conflicts with standard ServiceNow parameters. We use ?sn_debug=true, stick to that.
+
 
 ```typescript
 // IMPLEMENTATION DIRECTIVE: All changes must follow this process
@@ -69,25 +78,41 @@ interface BuildAgentDirective {
     approach: "small-atomic-changes";           // Each change is minimal and focused
     reversibility: "always-possible";          // Must be easy to revert any change
     functionality: "ambitious-but-tested";     // Don't limit features, limit risk
+    imports: "relative-only";                  // Only use relative path import statements
   };
   
   // MANDATORY WORKFLOW
   changeProcess: {
-    step1: "get-approval";                     // All changes need approval first
-    step2: "implement-atomically";             // Make one focused change
-    step3: "validate-build";                   // npm run build must succeed
-    step4: "validate-deployment";              // Deploy to test environment
-    step5: "user-review";                      // User acceptance required by in-browser review
-    step6: "proceed-or-rollback";              // Continue or revert based on results
+    step01: "explicit-get-approval";            // All changes EXPLICITELY need approval first
+    step02: "implement-atomically";             // Make one focused and atomic change
+    step03: "run-diagnostics";                  // validate the source
+    step04: "focus-single-issue";               // IF received list of typescript errors: FIRST focus on the top 1 or top 2 when related
+    step05: "explain-changes-and-reasoning";    // Tell the user what was changed and why
+    step06: "confirm-build";                    // Ask user approval before starting build or do another focused and atomic change
+      step06_Option1: "another-atomic-change";  // user agreed to another change, restart workflow from step01
+      step06_Option2: "build-confirmed";        // user agreed move to build, continue
+    step07: "validate-build";                   // npm run build must succeed
+    step08: "validate-deployment";              // Deploy to test environment
+    step09: "user-review";                      // User acceptance required by in-browser review
+    step10: "proceed-or-rollback";              // Continue or revert based on results
   };
   
   // VALIDATION GATES
   qualityGates: {
     buildValidation: "zero-errors";            // Build must complete without errors
     typeValidation: "strict-typescript";       // All types must be correct
-    patternCompliance: "follow-guide";        // Must follow ServiceNow-React-Essential-Patterns.md
+    patternCompliance: "follow-guide";        // Must follow Advice.md
     testability: "user-testable";             // Changes must be user-verified by in-browser review
     rollbackPlan: "always-defined";           // Clear rollback path required
+  };
+
+  // CDN RESOURCE VALIDATION (CRITICAL)
+  cdnValidation: {
+    debugMode: "sn_debug=true";                // URL parameter to enable resource debugging
+    showResources: "always-in-debug";         // Display all CDN resources when debugging
+    userValidation: "click-to-validate";      // User must click each resource to validate
+    preventStylingIssues: "mandatory-check";  // Prevent styling problems with validation
+    failureHandling: "immediate-notification"; // Show errors immediately if resource fails
   };
 }
 ```

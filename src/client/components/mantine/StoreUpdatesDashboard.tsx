@@ -7,10 +7,14 @@
 // DARK MODE: Fixed header background to match component themes using native Mantine Card
 // THEME: Added light/dark color scheme toggle
 // SIMPLIFIED: Updated to pass data to simplified filters component
+// THEME-COMPLIANT: Removed all style overrides - styling flows from theme only
+// ADDED: Automatic data refresh after installation completion
+// STATISTICS ALIGNMENT: FIXED - Text badges now properly aligned below numbers for consistent visual hierarchy
+// SMART REFRESH: Implemented smart data refresh strategy - no backend refetch for filter clearing
 
 import React, { useEffect, useMemo } from 'react';
 import {
-  Container,
+  Box,
   Stack,
   Title,
   Text,
@@ -46,8 +50,10 @@ import {
   useStoreUpdatesPagination,
   useStoreUpdatesStats
 } from '../../../hooks/useStoreUpdatesHybrid';
+import { useStoreUpdatesStore } from '../../../state/storeUpdatesStore';
 import { useStoreUpdatesSelection } from '../../../hooks/useStoreUpdatesSelection';
 import { useNotifications } from '../../../hooks/useNotifications';
+import { useEnhancedUserContext } from '../../../hooks/useUserContext'; // NEW: Use local store for admin role
 import { logger, createLogContext } from '../../../monitoring/logger';
 
 import { GenericButton } from '../../../components/mantine/Button';
@@ -55,8 +61,8 @@ import { GenericCard } from '../../../components/mantine/Card';
 
 import { StoreUpdatesDataGrid } from './StoreUpdatesDataGrid';
 import { StoreUpdatesFilters } from './StoreUpdatesFilters';
-import { StoreUpdatesActions } from './StoreUpdatesActions';
-import { DebugPanel } from '../debug/DebugPanel';
+import { useStoreUpdatesActions } from './StoreUpdatesActions';
+import { StatsGridSkeleton, DataGridSkeleton } from '../../../components/skeleton/SkeletonComponents';
 
 interface StoreUpdatesDashboardProps {
   className?: string;
@@ -73,7 +79,6 @@ const ColorSchemeToggle: React.FC = () => {
     <Tooltip label={`Switch to ${isDark ? 'light' : 'dark'} mode`}>
       <ActionIcon
         variant="light"
-        color="gray"
         size="lg"
         onClick={() => toggleColorScheme()}
         aria-label="Toggle color scheme"
@@ -89,7 +94,7 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
   showHeader = true,
   compactMode = false
 }) => {
-  const { addNotification } = useNotifications();
+  const { showSuccess, showError, showInfo } = useNotifications();
 
   const storeUpdatesData = useStoreUpdatesHybrid();
   const filteringHook = useStoreUpdatesFiltering();
@@ -98,37 +103,86 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
   // NEW: Use store-based dual-source statistics (single source of truth)
   const statsHook = useStoreUpdatesStats();
 
-  const selectionHook = useStoreUpdatesSelection(storeUpdatesData.data.records || []);
+  const selectionHook = useStoreUpdatesSelection(storeUpdatesData.data.rawServerData || []);
 
-  // Get Pattern 2A user context and quickStats (still available for fallback)
-  const userContext = storeUpdatesData.userContext || { 
-    firstName: 'User', 
-    displayName: 'User', 
-    isAdmin: false 
-  };
+  // NEW: Use local store for user context with admin role
+  const userContext = useEnhancedUserContext();
 
-  const handleRefresh = React.useCallback(async () => {
+  // Get the markDataActionsPerformed action from the store
+  const markDataActionsPerformed = useStoreUpdatesStore(state => state.actions.markDataActionsPerformed);
+
+  // SMART REFRESH: Define callbacks before hook usage for stable dependencies
+  const handleDataRefresh = React.useCallback(async () => {
+    // BACKEND REFETCH: For data-changing operations (install, sync, manual refresh)
     try {
       await storeUpdatesData.refresh();
-      addNotification({
-        type: 'success',
-        message: `Data refreshed successfully, ${userContext.firstName}!`
+      
+      // NEW: Mark that data-changing actions have been performed
+      // This will switch statistics to Pattern 2C (API-calculated) since server-injected data is now stale
+      markDataActionsPerformed();
+      
+      showSuccess({
+        title: 'Data Refreshed',
+        message: `Data refreshed successfully, ${userContext.firstName}! Filters and selections have been cleared.`
       });
+      
+      logger.info('Dashboard: Backend data refresh completed', createLogContext({
+        action: 'backend-refetch',
+        reason: 'data-changing-operation',
+        userContext: userContext.firstName,
+        switchedToPattern2C: true
+      }));
     } catch (error) {
-      addNotification({
-        type: 'error',
+      showError({
+        title: 'Refresh Failed',
         message: 'Failed to refresh store updates data.'
       });
+      
+      logger.error('Dashboard: Backend data refresh failed', error instanceof Error ? error : new Error(String(error)));
     }
-  }, [storeUpdatesData.refresh, userContext.firstName, addNotification]);
+  }, [storeUpdatesData.refresh, userContext.firstName, showSuccess, showError, markDataActionsPerformed]);
+
+  const handleSmartClearState = React.useCallback(() => {
+    // SMART CLEAR: Client-side only clearing (no backend refetch)
+    logger.info('Dashboard: Smart client-side clearing initiated', createLogContext({
+      action: 'smart-client-clear',
+      reason: 'filter-selection-clear',
+      backendRefetch: false
+    }));
+    
+    // Clear selections
+    selectionHook.clearSelection();
+    
+    // Clear all filters
+    filteringHook.clearFilters();
+    
+    logger.info('Dashboard: Smart client-side clearing completed', createLogContext({
+      selectionsCleared: true,
+      filtersCleared: true,
+      backendRefetch: false
+    }));
+  }, [selectionHook.clearSelection, filteringHook.clearFilters]);
+
+  // FIXED: Initialize useStoreUpdatesActions at top level with stable dependencies
+  // CORRECTED: Use rawServerData (all records) instead of paginated records for proper selection
+  const storeUpdatesActions = useStoreUpdatesActions({
+    selectionHook,
+    recordCount: paginationHook.totalRecords || 0,
+    compactMode,
+    allRecords: storeUpdatesData.data.rawServerData || [], // Full dataset for proper "Install All" behavior
+    onDataRefresh: handleDataRefresh,
+    filteringHook
+  });
+
+
 
   const handleExport = React.useCallback(() => {
     const exportCount = selectionHook.stats.totalSelected || paginationHook.totalRecords || 0;
-    addNotification({
-      type: 'info',
+    showInfo({
+      title: 'Export Started',
       message: `Exporting ${exportCount} store updates...`
     });
-  }, [selectionHook.stats.totalSelected, paginationHook.totalRecords, addNotification]);
+  }, [selectionHook.stats.totalSelected, paginationHook.totalRecords, showInfo]);
 
   // ENHANCED: Dashboard Statistics from Zustand Store (Single Source of Truth)
   const dashboardStats = useMemo(() => {
@@ -168,42 +222,32 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
     };
   }, [statsHook.data, selectionHook.stats.totalSelected]); // FIXED: Include selection count directly
 
+  // PATTERN 2A: Show immediate UI with server-injected data, progressive enhancement
   if (storeUpdatesData.isError) {
     return (
-      <Container py={compactMode ? 'xs' : 'sm'}>
+      <Box py={compactMode ? 'xs' : 'sm'} w="100%" maw="100%">
         <Alert icon={<IconAlertCircle size={16} />} title="Failed to Load Store Updates" color="red">
           <Text mb="md">Unable to fetch store updates data: {storeUpdatesData.error}</Text>
-          <Button leftSection={<IconRefresh size={16} />} onClick={handleRefresh} size="sm">
+          <Button leftSection={<IconRefresh size={16} />} onClick={handleDataRefresh} size="sm">
             Try Again
           </Button>
         </Alert>
-        <DebugPanel />
-      </Container>
+      </Box>
     );
   }
 
-  if (storeUpdatesData.isLoading) {
-    return (
-      <Container py={compactMode ? 'xs' : 'sm'}>
-        <Center h={400}>
-          <Stack align="center" gap="xs">
-            <Loader size="lg" />
-            <Text c="dimmed">Loading store updates for {userContext.firstName}...</Text>
-          </Stack>
-        </Center>
-        <DebugPanel />
-      </Container>
-    );
-  }
+  // PATTERN 2A: Show UI immediately with server-injected data, load table progressively
+  const hasServerData = storeUpdatesData.data.rawServerData && storeUpdatesData.data.rawServerData.length > 0;
+  const isInitialLoad = storeUpdatesData.isLoading && !hasServerData;
 
   return (
-    <Container py={compactMode ? 'xs' : 'sm'} size="xl">
-      <Stack gap="xs">
+    <Box py={compactMode ? 'xs' : 'sm'} w="100%" maw="100%">
+      <Stack gap="xs" w="100%">
         
         {showHeader && (
-          <Card padding="md" radius="md" withBorder>
-            <Group justify="space-between" align="center">
-              <div>
+          <Card padding="md" radius="md" withBorder w="100%">
+            <Group justify="space-between" align="center" w="100%">
+              <div style={{ flex: 1 }}>
                 <Group gap="xs" mb="xs">
                   <IconUser size={24} />
                   <Title order={1}>
@@ -227,10 +271,10 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
               </div>
               <Group gap="xs">
                 <ColorSchemeToggle />
-                <ActionIcon variant="light" color="blue" size="lg" onClick={handleRefresh}>
+                <ActionIcon variant="light" size="lg" onClick={handleDataRefresh} aria-label="Refresh data">
                   <IconRefresh size={20} />
                 </ActionIcon>
-                <ActionIcon variant="light" color="blue" size="lg" onClick={handleExport}>
+                <ActionIcon variant="light" size="lg" onClick={handleExport} aria-label="Export data">
                   <IconDownload size={20} />
                 </ActionIcon>
               </Group>
@@ -238,49 +282,62 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
           </Card>
         )}
 
-        {dashboardStats && (
-          <Grid gutter="xs">
+        {/* PATTERN 2A: Show stats immediately, or skeleton during initial load */}
+        {dashboardStats ? (
+          <Grid gutter="xs" w="100%">
             <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
-              <GenericCard padding="sm">
-                <Group justify="space-between">
-                  <div>
+              <GenericCard padding="sm" w="100%">
+                <Group justify="space-between" w="100%">
+                  <div style={{ flex: 1 }}>
                     <Text c="dimmed" size="sm" fw={600}>Total Applications</Text>
-                    <Text size="xl" fw={700}>{dashboardStats.totalApplications}</Text>
-                    <Text size="xs" c="dimmed">Available for updates</Text>
+                    <Text size="xl" fw={700} c="inherit">
+                      {dashboardStats.totalApplications}
+                    </Text>
+                    <Text size="xs" c="dimmed" mt={4}>
+                      Available for updates
+                    </Text>
                     {logger.isDebugEnabled() && (
                       <Text size="xs" c="dimmed" mt={2}>
                         Source: {dashboardStats.source === 'pattern-2a-immediate' ? '2A' : '2C'}
                       </Text>
                     )}
                   </div>
-                  <IconChartBar size={32} style={{ color: 'var(--mantine-color-blue-6)' }} />
+                  <IconChartBar size={32} />
                 </Group>
               </GenericCard>
             </Grid.Col>
 
             <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
-              <GenericCard padding="sm">
-                <Group justify="space-between">
-                  <div>
+              <GenericCard padding="sm" w="100%">
+                <Group justify="space-between" w="100%">
+                  <div style={{ flex: 1 }}>
                     <Text c="dimmed" size="sm" fw={600}>Critical Updates</Text>
-                    <Text size="xl" fw={700} c="red">{dashboardStats.criticalCount}</Text>
-                    <Text size="xs" c="dimmed">Requiring attention</Text>
+                    <Text size="xl" fw={700} c="red">
+                      {dashboardStats.criticalCount}
+                    </Text>
+                    <Text size="xs" c="dimmed" mt={4}>
+                      Requiring attention
+                    </Text>
                     {logger.isDebugEnabled() && dashboardStats.hasStringCorruption && (
                       <Badge size="xs" color="red" mt={2}>Corruption Detected</Badge>
                     )}
                   </div>
-                  <IconAlertCircle size={32} style={{ color: 'var(--mantine-color-red-6)' }} />
+                  <IconAlertCircle size={32} />
                 </Group>
               </GenericCard>
             </Grid.Col>
 
             <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
-              <GenericCard padding="sm">
-                <Group justify="space-between">
-                  <div>
+              <GenericCard padding="sm" w="100%">
+                <Group justify="space-between" w="100%">
+                  <div style={{ flex: 1 }}>
                     <Text c="dimmed" size="sm" fw={600}>Selected Items</Text>
-                    <Text size="xl" fw={700} c="teal">{dashboardStats.selectedCount}</Text>
-                    <Text size="xs" c="dimmed">Ready for processing</Text>
+                    <Text size="xl" fw={700} c="teal">
+                      {dashboardStats.selectedCount}
+                    </Text>
+                    <Text size="xs" c="dimmed" mt={4}>
+                      Ready for processing
+                    </Text>
                     {logger.isDebugEnabled() && dashboardStats.hasSignificantDifference && (
                       <Badge size="xs" color="orange" mt={2}>Significant Diff</Badge>
                     )}
@@ -291,11 +348,11 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
             </Grid.Col>
 
             <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
-              <GenericCard padding="sm">
-                <Group justify="space-between">
-                  <div>
+              <GenericCard padding="sm" w="100%">
+                <Group justify="space-between" w="100%">
+                  <div style={{ flex: 1 }}>
                     <Text c="dimmed" size="sm" fw={600}>Total Updates</Text>
-                    <Text size="xl" fw={700}>
+                    <Text size="xl" fw={700} c="inherit">
                       {dashboardStats.totalMajorUpdates + dashboardStats.totalMinorUpdates + dashboardStats.totalPatchUpdates}
                     </Text>
                     <Group gap={2} mt={4}>
@@ -318,28 +375,31 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
                       </Group>
                     )}
                   </div>
-                  <IconInfoCircle size={32} style={{ color: 'var(--mantine-color-gray-6)' }} />
+                  <IconInfoCircle size={32} />
                 </Group>
               </GenericCard>
             </Grid.Col>
           </Grid>
+        ) : (
+          <StatsGridSkeleton />
         )}
 
-        <Card padding="xs">
-          <Group justify="space-between" mb="xs">
+        <Card padding="lg" radius="md" withBorder w="100%">
+          <Group justify="space-between" mb="xs" w="100%">
             <Group gap="xs">
-              {/* UPDATED: Pass data to simplified filters component */}
+              {/* LAYOUT FIX: Filters with filter-aligned action icons positioned together */}
               <StoreUpdatesFilters 
                 filteringHook={filteringHook} 
                 data={storeUpdatesData.data.rawServerData || []} // Pass raw server data for unique values
                 compactMode={compactMode} 
               />
+              
+              {/* LAYOUT FIX: Action icons positioned next to filter icon with consistent styling */}
+              {storeUpdatesActions.FilterAlignedIcons()}
             </Group>
-            <StoreUpdatesActions 
-              selectionHook={selectionHook} 
-              recordCount={paginationHook.totalRecords || 0} 
-              compactMode={compactMode} 
-            />
+            
+            {/* LAYOUT FIX: Main actions component on the right */}
+            {storeUpdatesActions.ActionsComponent()}
           </Group>
         </Card>
 
@@ -349,6 +409,8 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
           paginationHook={paginationHook}
           selectionHook={selectionHook}
           compactMode={compactMode}
+          onDataRefresh={handleDataRefresh} // Backend refetch for data-changing operations
+          onClearState={handleSmartClearState} // Smart client-side clearing only
         />
 
         {/* Debug information for development */}
@@ -361,6 +423,7 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
                 <Text size="xs">Calculated Preferred: {dashboardStats.isCalculatedPreferred ? 'Yes' : 'No'}</Text>
                 <Text size="xs">Has Difference: {dashboardStats.hasSignificantDifference ? 'Yes' : 'No'}</Text>
                 <Text size="xs">Has Corruption: {dashboardStats.hasStringCorruption ? 'Yes' : 'No'}</Text>
+                <Text size="xs">Admin Role: {userContext.isAdmin ? 'Yes' : 'No'}</Text>
               </Group>
               {dashboardStats.immediateStats && dashboardStats.calculatedStats && (
                 <Group gap="xs">
@@ -376,9 +439,7 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
           </Alert>
         )}
       </Stack>
-
-      <DebugPanel />
-    </Container>
+    </Box>
   );
 };
 

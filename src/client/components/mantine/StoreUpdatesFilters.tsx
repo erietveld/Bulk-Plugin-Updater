@@ -1,8 +1,8 @@
 // src/client/components/mantine/StoreUpdatesFilters.tsx
+// COMPLIANCE: Step 5 - Updated with nullish coalescing and refined types
 // SIMPLIFIED: Only 2 filters - Batch Level and Published Date
 // Following Architecture.md patterns with generic component integration
-// UPDATED: Simplified filter panel with only Batch Level and Published Date filters
-// UPDATED: Dynamic options from actual data
+// FIXED: Removed hardcoded colors to match hamburger menu styling
 
 import React, { useCallback, useState, useMemo } from 'react';
 import {
@@ -28,67 +28,129 @@ import {
 import type { useStoreUpdatesFiltering } from '../../../hooks/useStoreUpdatesHybrid';
 import type { StoreUpdate } from '../../../hooks/useStoreUpdatesHybrid';
 import { logger } from '../../../monitoring/logger';
+import { 
+  getString, 
+  getArray, 
+  getInteger, 
+  getBoolean,
+  getNonEmptyString 
+} from '../../../utils/typeRefinements';
 
 interface StoreUpdatesFiltersProps {
   filteringHook: ReturnType<typeof useStoreUpdatesFiltering>;
-  data: StoreUpdate[]; // Data to generate filter options from
-  compactMode?: boolean;
+  data: readonly StoreUpdate[]; // Refined: readonly array, never undefined
+  compactMode: boolean; // Refined: never undefined, explicit default
+}
+
+// Refined type for filter options - no undefined values
+interface FilterOption {
+  readonly value: string;
+  readonly label: string;
+  readonly count?: number; // Optional count for enhanced UX
 }
 
 /**
- * SIMPLIFIED: Clean filter panel with only 2 filters
+ * SIMPLIFIED: Clean filter panel with refined types and nullish coalescing
  * 1. Batch Level: Multi-select with Major, Minor, Patch from actual data
  * 2. Published Date: Multi-select with unique published dates from data
  */
 export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
   filteringHook,
-  data,
-  compactMode = false
+  data = [], // Default value using nullish coalescing
+  compactMode = false // Default value using nullish coalescing
 }) => {
   const [drawerOpened, setDrawerOpened] = useState(false);
 
-  // Generate batch level options from actual data
-  const batchLevelOptions = useMemo(() => {
-    const uniqueBatchLevels = [...new Set(data.map(record => record.batch_level).filter(Boolean))];
-    return uniqueBatchLevels.map(level => ({
+  // Generate batch level options from actual data with nullish coalescing
+  const batchLevelOptions = useMemo((): FilterOption[] => {
+    // Use refined utility functions for safe data processing
+    const dataArray = getArray(data, []);
+    
+    // Count occurrences for better UX
+    const levelCounts = new Map<string, number>();
+    
+    dataArray.forEach(record => {
+      const batchLevel = getString(record?.batch_level, '').trim();
+      if (batchLevel) {
+        levelCounts.set(batchLevel, (levelCounts.get(batchLevel) ?? 0) + 1);
+      }
+    });
+    
+    // Convert to options with counts using nullish coalescing
+    return Array.from(levelCounts.entries()).map(([level, count]): FilterOption => ({
       value: level,
-      label: level.charAt(0).toUpperCase() + level.slice(1) // Capitalize first letter
-    }));
+      label: `${getNonEmptyString(level, 'Unknown').charAt(0).toUpperCase()}${level.slice(1)} (${count})`,
+      count
+    })).sort((a, b) => getString(a.value, '').localeCompare(getString(b.value, '')));
   }, [data]);
 
-  // Generate published date options from actual data
-  const publishedDateOptions = useMemo(() => {
-    const uniqueDates = [...new Set(
-      data.map(record => record.available_version_publish_date)
-        .filter(Boolean) // Remove null/undefined values
-        .map(dateStr => {
-          // Format dates consistently
-          try {
-            const date = new Date(dateStr!); // FIXED: Added non-null assertion
-            return date.toLocaleDateString('en-US', {
+  // Generate published date options from actual data with nullish coalescing
+  const publishedDateOptions = useMemo((): FilterOption[] => {
+    const dataArray = getArray(data, []);
+    
+    // Count occurrences and format dates consistently
+    const dateCounts = new Map<string, number>();
+    
+    dataArray.forEach(record => {
+      const dateStr = getString(record?.available_version_publish_date, '').trim();
+      if (dateStr) {
+        try {
+          const date = new Date(dateStr);
+          if (!isNaN(date.getTime())) {
+            const formatted = date.toLocaleDateString('en-US', {
               year: 'numeric',
               month: 'short',
               day: 'numeric'
             });
-          } catch {
-            return dateStr; // Return original if parsing fails
+            dateCounts.set(formatted, (dateCounts.get(formatted) ?? 0) + 1);
           }
-        })
-    )].sort(); // Sort dates
+        } catch {
+          // If date parsing fails, use original string
+          const fallback = getNonEmptyString(dateStr, 'Invalid Date');
+          dateCounts.set(fallback, (dateCounts.get(fallback) ?? 0) + 1);
+        }
+      }
+    });
 
-    return uniqueDates.map(date => ({
-      value: date!,
-      label: date!
-    }));
+    // Convert to options with counts using nullish coalescing
+    return Array.from(dateCounts.entries())
+      .map(([date, count]): FilterOption => ({
+        value: date,
+        label: `${date} (${count})`,
+        count
+      }))
+      .sort((a, b) => {
+        // Sort by date (newest first)
+        try {
+          const dateA = new Date(getString(a.value, ''));
+          const dateB = new Date(getString(b.value, ''));
+          return dateB.getTime() - dateA.getTime();
+        } catch {
+          return getString(a.value, '').localeCompare(getString(b.value, ''));
+        }
+      });
   }, [data]);
 
-  // Count active filters
-  const activeFilterCount = useMemo(() => {
-    let count = 0;
-    if (filteringHook.filters.batch_level.length > 0) count++;
-    if (filteringHook.filters.published_date && filteringHook.filters.published_date.length > 0) count++;
-    return count;
+  // Count active filters with nullish coalescing
+  const activeFilterCount = useMemo((): number => {
+    const batchLevelCount = getArray(filteringHook.filters.batch_level, []).length;
+    const publishedDateCount = getArray(filteringHook.filters.published_date, []).length;
+    
+    return (batchLevelCount > 0 ? 1 : 0) + (publishedDateCount > 0 ? 1 : 0);
   }, [filteringHook.filters.batch_level, filteringHook.filters.published_date]);
+
+  // Safe filter removal handlers with nullish coalescing
+  const removeBatchLevelFilter = useCallback((levelToRemove: string) => {
+    const currentLevels = getArray(filteringHook.filters.batch_level, []);
+    const newLevels = currentLevels.filter(level => getString(level, '') !== getString(levelToRemove, ''));
+    filteringHook.setBatchLevelFilter(newLevels);
+  }, [filteringHook]);
+
+  const removePublishedDateFilter = useCallback((dateToRemove: string) => {
+    const currentDates = getArray(filteringHook.filters.published_date, []);
+    const newDates = currentDates.filter(date => getString(date, '') !== getString(dateToRemove, ''));
+    filteringHook.setPublishedDateFilter(newDates);
+  }, [filteringHook]);
 
   return (
     <>
@@ -97,9 +159,9 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
         <Tooltip label="Open Filters Panel">
           <ActionIcon
             variant={activeFilterCount > 0 ? 'filled' : 'light'}
-            color="blue"
             size="lg"
             onClick={() => setDrawerOpened(true)}
+            aria-label="Open filters panel"
           >
             <IconFilter size={18} />
           </ActionIcon>
@@ -107,7 +169,7 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
 
         {/* Active Filters Count Badge */}
         {activeFilterCount > 0 && (
-          <Badge variant="filled" color="blue" size="sm">
+          <Badge variant="filled" size="sm">
             {activeFilterCount} active
           </Badge>
         )}
@@ -117,9 +179,9 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
           <Tooltip label="Clear all filters">
             <ActionIcon
               variant="light"
-              color="gray"
               onClick={filteringHook.clearFilters}
               size="lg"
+              aria-label="Clear all filters"
             >
               <IconFilterOff size={18} />
             </ActionIcon>
@@ -151,11 +213,11 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
               <MultiSelect
                 placeholder="Select batch levels"
                 data={batchLevelOptions}
-                value={filteringHook.filters.batch_level}
-                onChange={(value) => filteringHook.setBatchLevelFilter(value)}
+                value={getArray(filteringHook.filters.batch_level, [])}
+                onChange={(value) => filteringHook.setBatchLevelFilter(getArray(value, []))}
                 clearable
                 searchable
-                description={`${batchLevelOptions.length} unique levels available`}
+                description={`${getInteger(batchLevelOptions.length, 0)} unique levels available`}
               />
             </div>
 
@@ -165,11 +227,11 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
               <MultiSelect
                 placeholder="Select published dates"
                 data={publishedDateOptions}
-                value={filteringHook.filters.published_date || []}
-                onChange={(value) => filteringHook.setPublishedDateFilter(value)}
+                value={getArray(filteringHook.filters.published_date, [])}
+                onChange={(value) => filteringHook.setPublishedDateFilter(getArray(value, []))}
                 clearable
                 searchable
-                description={`${publishedDateOptions.length} unique dates available`}
+                description={`${getInteger(publishedDateOptions.length, 0)} unique dates available`}
                 maxDropdownHeight={200}
               />
             </div>
@@ -182,52 +244,52 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
                 <Text size="sm" fw={600} mb="xs">Active Filters</Text>
                 <Stack gap="xs">
 
-                  {filteringHook.filters.batch_level.map((level: string) => (
-                    <Badge
-                      key={level}
-                      variant="light"
-                      color="blue"
-                      rightSection={
-                        <ActionIcon
-                          size="xs"
-                          variant="transparent"
-                          onClick={() => {
-                            const newLevels = filteringHook.filters.batch_level.filter((l: string) => l !== level);
-                            filteringHook.setBatchLevelFilter(newLevels);
-                          }}
-                        >
-                          <IconX size={10} />
-                        </ActionIcon>
-                      }
-                      style={{ justifyContent: 'space-between', width: '100%' }}
-                    >
-                      Batch: {level}
-                    </Badge>
-                  ))}
+                  {getArray(filteringHook.filters.batch_level, []).map((level: string) => {
+                    const safeLevel = getString(level, 'Unknown');
+                    return (
+                      <Badge
+                        key={safeLevel}
+                        variant="light"
+                        rightSection={
+                          <ActionIcon
+                            size="xs"
+                            variant="transparent"
+                            onClick={() => removeBatchLevelFilter(safeLevel)}
+                            aria-label={`Remove ${safeLevel} filter`}
+                          >
+                            <IconX size={10} />
+                          </ActionIcon>
+                        }
+                        style={{ justifyContent: 'space-between', width: '100%' }}
+                      >
+                        Batch: {safeLevel}
+                      </Badge>
+                    );
+                  })}
 
-                  {(filteringHook.filters.published_date || []).map((date: string) => (
-                    <Badge
-                      key={date}
-                      variant="light"
-                      color="green"
-                      rightSection={
-                        <ActionIcon
-                          size="xs"
-                          variant="transparent"
-                          onClick={() => {
-                            const currentDates = filteringHook.filters.published_date || [];
-                            const newDates = currentDates.filter((d: string) => d !== date);
-                            filteringHook.setPublishedDateFilter(newDates);
-                          }}
-                        >
-                          <IconX size={10} />
-                        </ActionIcon>
-                      }
-                      style={{ justifyContent: 'space-between', width: '100%' }}
-                    >
-                      Date: {date}
-                    </Badge>
-                  ))}
+                  {getArray(filteringHook.filters.published_date, []).map((date: string) => {
+                    const safeDate = getString(date, 'Unknown Date');
+                    return (
+                      <Badge
+                        key={safeDate}
+                        variant="light"
+                        color="green"
+                        rightSection={
+                          <ActionIcon
+                            size="xs"
+                            variant="transparent"
+                            onClick={() => removePublishedDateFilter(safeDate)}
+                            aria-label={`Remove ${safeDate} filter`}
+                          >
+                            <IconX size={10} />
+                          </ActionIcon>
+                        }
+                        style={{ justifyContent: 'space-between', width: '100%' }}
+                      >
+                        Date: {safeDate}
+                      </Badge>
+                    );
+                  })}
                 </Stack>
               </div>
             )}
@@ -240,8 +302,8 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
                   <Text size="sm" fw={600} mb="xs">Filter Summary</Text>
                   <Text size="xs" c="dimmed">
                     {activeFilterCount} active filter{activeFilterCount !== 1 ? 's' : ''} • 
-                    Showing {filteringHook.insights.totalFiltered} of {filteringHook.insights.allRecordsCount} records
-                    {filteringHook.insights.isFiltered && ' (filtered)'}
+                    Showing {getInteger(filteringHook.insights.totalFiltered, 0)} of {getInteger(filteringHook.insights.allRecordsCount, 0)} records
+                    {getBoolean(filteringHook.insights.isFiltered, false) && ' (filtered)'}
                   </Text>
                 </div>
               </>
@@ -252,7 +314,6 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
             <Group justify="space-between">
               <Button
                 variant="light"
-                color="gray"
                 onClick={filteringHook.clearFilters}
                 leftSection={<IconFilterOff size={16} />}
                 size="sm"
@@ -275,4 +336,5 @@ export const StoreUpdatesFilters: React.FC<StoreUpdatesFiltersProps> = ({
   );
 };
 
+// Export with refined prop types
 export default StoreUpdatesFilters;

@@ -1,72 +1,80 @@
 // src/hooks/useNotifications.ts
-// Simple Mantine notifications hook
-// Following Architecture.md patterns for client-state management
+// Notifications custom hook
+// Following atomic design principle: Custom Hooks manage business logic and local state
 
-import { notifications } from '@mantine/notifications';
+import { useCallback } from 'react';
+import { showNotification, hideNotification } from '@mantine/notifications';
+import { debugService } from '../services/debugService';
 
-export type NotificationType = 'success' | 'error' | 'warning' | 'info';
-
-export interface NotificationOptions {
-  type: NotificationType;
+interface NotificationOptions {
+  title: string;
   message: string;
-  title?: string;
+  color?: string;
   autoClose?: number | false;
+  position?: 'top-left' | 'top-right' | 'top-center' | 'bottom-left' | 'bottom-right' | 'bottom-center';
+  icon?: React.ReactNode;
+  id?: string;
 }
 
-/**
- * Simple notifications hook using Mantine notifications
- * Provides consistent notification styling and behavior
- */
 export const useNotifications = () => {
-  const addNotification = (options: NotificationOptions) => {
-    const { type, message, title, autoClose = 5000 } = options;
-
-    const baseConfig = {
-      title,
-      message,
-      autoClose,
-      withCloseButton: true,
-    };
-
-    switch (type) {
-      case 'success':
-        notifications.show({
-          ...baseConfig,
-          color: 'green',
-        });
-        break;
-
-      case 'error':
-        notifications.show({
-          ...baseConfig,
-          color: 'red',
-          autoClose: false, // Keep error notifications visible
-        });
-        break;
-
-      case 'warning':
-        notifications.show({
-          ...baseConfig,
-          color: 'orange',
-        });
-        break;
-
-      case 'info':
-      default:
-        notifications.show({
-          ...baseConfig,
-          color: 'blue',
-        });
-        break;
+  const showSuccess = useCallback((options: Omit<NotificationOptions, 'color'>) => {
+    showNotification({
+      ...options,
+      color: 'green',
+      autoClose: options.autoClose ?? 4000,
+      position: options.position ?? 'top-right',
+    });
+  }, []);
+  
+  const showError = useCallback((options: Omit<NotificationOptions, 'color'>) => {
+    showNotification({
+      ...options,
+      color: 'red',
+      autoClose: options.autoClose ?? 6000,
+      position: options.position ?? 'top-right',
+    });
+  }, []);
+  
+  const showWarning = useCallback((options: Omit<NotificationOptions, 'color'>) => {
+    showNotification({
+      ...options,
+      color: 'yellow',
+      autoClose: options.autoClose ?? 5000,
+      position: options.position ?? 'top-right',
+    });
+  }, []);
+  
+  const showInfo = useCallback((options: Omit<NotificationOptions, 'color'>) => {
+    showNotification({
+      ...options,
+      color: 'blue',
+      autoClose: options.autoClose ?? 4000,
+      position: options.position ?? 'top-right',
+    });
+  }, []);
+  
+  const showDebug = useCallback((options: Omit<NotificationOptions, 'color'>) => {
+    if (debugService.isDebugMode()) {
+      showNotification({
+        ...options,
+        color: 'orange',
+        autoClose: options.autoClose ?? 3000,
+        position: options.position ?? 'top-right',
+      });
     }
-  };
-
-  const clearNotifications = () => {
-    notifications.clean();
-  };
-
+  }, []);
+  
+  const hide = useCallback((id: string) => {
+    hideNotification(id);
+  }, []);
+  
   return {
-    addNotification,
-    clearNotifications
+    showSuccess,
+    showError,
+    showWarning,
+    showInfo,
+    showDebug,
+    hide,
+    show: showNotification, // Raw access for custom notifications
   };
 };

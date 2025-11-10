@@ -59,8 +59,8 @@ Result: N base themes × 2 color schemes = 2N combinations
 ### **Step 1: Create Base Theme Definitions**
 
 ```typescript
-// src/theme/mantineTheme.ts
-import { createTheme, MantineTheme } from '@mantine/core';
+// src/theme/FirstTheme.ts
+import { createTheme, FirstTheme } from '@mantine/core';
 
 const brandColors = [
   '#f0f9ff',  // 50 - Lightest
@@ -89,14 +89,14 @@ export const enterpriseTheme = createTheme({
       defaultProps: { radius: 'lg', shadow: 'sm', withBorder: true },
     },
   },
-}) as MantineTheme;
+}) as FirstTheme;
 ```
 
 ```typescript
-// src/theme/servicenowTheme.ts
-import { createTheme, MantineTheme } from '@mantine/core';
+// src/theme/SecondTheme.ts
+import { createTheme, SecondTheme } from '@mantine/core';
 
-const servicenowColors = [
+const brandColors = [
   '#e6f4ea', // 50 - ServiceNow green palette
   '#b1d8bb', // 100
   '#7acb86', // 200
@@ -111,9 +111,9 @@ const servicenowColors = [
 
 export const enterpriseTheme = createTheme({
   primaryColor: 'brand',
-  colors: { brand: servicenowColors },
+  colors: { brand: brandColors },
   // ... rest of theme configuration
-}) as MantineTheme;
+}) as SecondTheme;
 ```
 
 ### **Step 2: Configure Enhanced Theme Selection System**
@@ -121,14 +121,14 @@ export const enterpriseTheme = createTheme({
 ```typescript
 // src/client/app.tsx
 import { MantineProvider } from '@mantine/core';
-import { enterpriseTheme as mantineTheme } from '../theme/mantineTheme';
-import { enterpriseTheme as servicenowTheme } from '../theme/servicenowTheme';
+import { enterpriseTheme as FirstTheme } from '../theme/mantineTheme';
+import { enterpriseTheme as SecondTheme } from '../theme/servicenowTheme';
 
 // Enhanced theme registry with performance metadata
 const themes = {
   mantine: { 
-    theme: mantineTheme, 
-    name: 'Corporate Blue', 
+    theme: FirstTheme, 
+    name: 'Default Blue', 
     icon: IconPalette,
     backgroundGradient: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 25%, #bae6fd 50%, #e0f2fe 75%, #f0f9ff 100%)',
     performance: {
@@ -138,8 +138,8 @@ const themes = {
     }
   },
   servicenow: { 
-    theme: servicenowTheme, 
-    name: 'ServiceNow Green', 
+    theme: SecondTheme, 
+    name: 'Inspired Green', 
     icon: IconSun,
     backgroundGradient: 'linear-gradient(135deg, #f0fdf4 0%, #e6f4ea 25%, #dcfce7 50%, #e6f4ea 75%, #f0fdf4 100%)',
     performance: {

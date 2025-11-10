@@ -1,12 +1,13 @@
 // src/client/components/mantine/StoreUpdatesDataGrid.tsx
-// PHASE 5: Enhanced search performance with minimum 3 characters and improved input state
-// COLUMN UPDATE: Removed level column, changed Priority to Level (showing batch_level data)
-// Advanced DataGrid for Store Updates with CLIENT-SIDE pagination, search, filtering, and multi-select
+// UPDATED: Added expandable rows functionality with sys_store_app details
+// COLUMNS: Application Name (from application.name), Latest (actual version), Published Date, Description, Level
+// EXPANDABLE: Click rows to show application details with Application Manager link
 // Following Architecture.md patterns with generic component integration
-// CLEANED: Removed excessive debug logging, kept essential functionality
-// UPDATED: Added Published Date and Description columns from available_version dot-walking
-// STYLED: Changed Published Date and Description text color to match version subtext (dimmed)
-// FIXED: Updated batch_level badge colors to match actual API data values (major/minor/patch)
+// PHASE 5: Enhanced search performance with minimum 3 characters and improved input state
+// COLORS: Fixed theme-agnostic selected and expanded row colors using consistent blue across all themes
+// HOVER: Removed hover effect from expanded row details
+// BUTTONS: Standardized all button color/hover properties to match Refresh button variant="light"
+// SMART CLEAR: Header checkbox implements smart clearing strategy (no backend refetch for filter clearing)
 
 import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import {
@@ -24,7 +25,15 @@ import {
   Alert,
   Button,
   Center,
-  Loader
+  Loader,
+  Box,
+  Anchor,
+  Divider,
+  Collapse,
+  useMantineTheme,
+  useMantineColorScheme,
+  alpha,
+  rgba
 } from '@mantine/core';
 import {
   IconSearch,
@@ -36,14 +45,18 @@ import {
   IconRefresh,
   IconChevronLeft,
   IconChevronRight,
-  IconX
+  IconX,
+  IconChevronDown,
+  IconChevronRight as IconChevronRightCollapsed,
+  IconExternalLink
 } from '@tabler/icons-react';
 
-// Import types and hooks - FIXED: Updated imports after cleanup
+// Import types and hooks
 import type { StoreUpdate } from '../../../hooks/useStoreUpdatesHybrid';
 import type { useStoreUpdatesFiltering, useStoreUpdatesPagination } from '../../../hooks/useStoreUpdatesHybrid';
 import type { useStoreUpdatesSelection } from '../../../hooks/useStoreUpdatesSelection';
 import { logger, createLogContext } from '../../../monitoring/logger';
+import { useThemeManagement } from '../../../hooks/useThemeManagement';
 
 // Import generic components
 import { GenericTable } from '../../../components/mantine/Table';
@@ -57,6 +70,8 @@ interface StoreUpdatesDataGridProps {
   compactMode?: boolean;
   onRowClick?: (record: StoreUpdate) => void;
   onRowDoubleClick?: (record: StoreUpdate) => void;
+  onDataRefresh?: () => Promise<void>; // For data-changing operations only
+  onClearState?: () => void; // NEW: For smart client-side clearing only
 }
 
 // Column configuration
@@ -84,8 +99,92 @@ const formatDate = (dateString?: string): string => {
   }
 };
 
+// Helper function to build Application Manager URL
+const buildAppManagerUrl = (sourceAppId?: string, version?: string): string => {
+  if (!sourceAppId) return '#';
+  const safeVersion = version || 'latest';
+  return `./now/app-manager/home/app/id/${sourceAppId}/v/${safeVersion}/details`;
+};
+
+/**
+ * Expandable Row Details Component
+ * Shows sys_store_app information with layout: Version (top-left), Install Date (top-right), 
+ * Description (multi-line below), and Application Manager link
+ * UPDATED: Uses consistent blue background across all themes
+ */
+interface ExpandableRowDetailsProps {
+  record: StoreUpdate;
+}
+
+const ExpandableRowDetails: React.FC<ExpandableRowDetailsProps> = ({ record }) => {
+  const theme = useMantineTheme();
+  const { colorScheme } = useMantineColorScheme();
+  
+  // Use consistent blue background across all themes (same as selected rows)
+  const expandedBackgroundColor = colorScheme === 'dark' 
+    ? alpha(theme.colors.blue[8], 0.15)
+    : alpha(theme.colors.blue[1], 0.3);
+
+  const appManagerUrl = buildAppManagerUrl(
+    record.available_version_source_app_id, 
+    record.available_version_version
+  );
+
+  return (
+    <Box p="md" style={{ backgroundColor: expandedBackgroundColor, borderRadius: '4px' }}>
+      <Stack gap="sm">
+        {/* Top row: Version (left) and Install Date (right) */}
+        <Group justify="space-between" align="flex-start">
+          <Stack gap={2}>
+            <Text size="xs" fw={500} c="dimmed">Installed Version</Text>
+            <Text size="sm" fw={600}>
+              {record.application_version || 'N/A'}
+            </Text>
+          </Stack>
+          
+          <Stack gap={2} align="flex-end">
+            <Text size="xs" fw={500} c="dimmed">Install Date</Text>
+            <Text size="sm" fw={600}>
+              {formatDate(record.application_install_date)}
+            </Text>
+          </Stack>
+        </Group>
+
+        {/* Description section */}
+        <Stack gap={2}>
+          <Text size="xs" fw={500} c="dimmed">Description</Text>
+          <Text size="sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+            {record.application_short_description || 'No description available'}
+          </Text>
+        </Stack>
+
+        {/* Application Manager link */}
+        {record.available_version_source_app_id && (
+          <Box>
+            <Divider my="xs" />
+            <Anchor
+              href={appManagerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              fw={500}
+              style={{ textDecoration: 'none' }}
+            >
+              <Group gap={4} align="center">
+                <IconExternalLink size={14} />
+                <Text>View in Application Manager</Text>
+              </Group>
+            </Anchor>
+          </Box>
+        )}
+      </Stack>
+    </Box>
+  );
+};
+
 /**
  * Generic pagination component that can be reused across the application
+ * UPDATED: Standardized button styling to variant="light"
  */
 interface PaginationProps {
   currentPage: number;
@@ -126,7 +225,7 @@ const GenericPagination: React.FC<PaginationProps> = ({
       <Button
         key={1}
         size="sm"
-        variant={1 === currentPage ? "filled" : "subtle"}
+        variant={1 === currentPage ? "outline" : "light"}
         onClick={() => onPageClick(1)}
       >
         1
@@ -146,7 +245,7 @@ const GenericPagination: React.FC<PaginationProps> = ({
       <Button
         key={i}
         size="sm"
-        variant={i === currentPage ? "filled" : "subtle"}
+        variant={i === currentPage ? "outline" : "light"}
         onClick={() => onPageClick(i)}
       >
         {i}
@@ -166,7 +265,7 @@ const GenericPagination: React.FC<PaginationProps> = ({
       <Button
         key={totalPages}
         size="sm"
-        variant={totalPages === currentPage ? "filled" : "subtle"}
+        variant={totalPages === currentPage ? "outline" : "light"}
         onClick={() => onPageClick(totalPages)}
       >
         {totalPages}
@@ -178,7 +277,7 @@ const GenericPagination: React.FC<PaginationProps> = ({
     <Group gap="xs">
       <Button
         size="sm"
-        variant="subtle"
+        variant="light"
         onClick={onPrevious}
         disabled={!canGoPrevious}
         leftSection={<IconChevronLeft size={14} />}
@@ -190,7 +289,7 @@ const GenericPagination: React.FC<PaginationProps> = ({
       
       <Button
         size="sm"
-        variant="subtle"
+        variant="light"
         onClick={onNext}
         disabled={!canGoNext}
         rightSection={<IconChevronRight size={14} />}
@@ -202,7 +301,7 @@ const GenericPagination: React.FC<PaginationProps> = ({
 };
 
 /**
- * PHASE 5: Enhanced Search Input Component with controlled state and minimum character requirement
+ * Enhanced Search Input Component with controlled state and minimum character requirement
  */
 interface EnhancedSearchInputProps {
   onSearch: (value: string) => void;
@@ -217,7 +316,6 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
   placeholder = "Search applications...",
   minCharacters = 3
 }) => {
-  // PHASE 5: Local controlled state to prevent value loss on rerenders
   const [inputValue, setInputValue] = useState(currentFilter);
   const [isSearchActive, setIsSearchActive] = useState(false);
 
@@ -228,7 +326,7 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
     }
   }, [currentFilter]);
 
-  // PHASE 5: Enhanced debounced search with minimum character requirement
+  // Enhanced debounced search with minimum character requirement
   const debouncedSearch = useCallback(
     React.useMemo(() => {
       let timeoutId: NodeJS.Timeout;
@@ -238,7 +336,6 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
         setIsSearchActive(true);
         
         timeoutId = setTimeout(() => {
-          // PHASE 5: Only search if meets minimum character requirement or is empty (for clearing)
           if (value.length >= minCharacters || value.length === 0) {
             onSearch(value);
             logger.info('Enhanced search triggered', createLogContext({
@@ -248,7 +345,6 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
               searchType: value.length === 0 ? 'clear' : 'filter'
             }));
           } else if (value.length > 0) {
-            // Clear search if under minimum but not empty
             onSearch('');
             logger.info('Search cleared - under minimum characters', createLogContext({
               searchTerm: value,
@@ -277,7 +373,7 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
     setIsSearchActive(false);
   }, [onSearch]);
 
-  // PHASE 5: Dynamic placeholder based on input state
+  // Dynamic placeholder based on input state
   const getPlaceholder = () => {
     if (inputValue.length > 0 && inputValue.length < minCharacters) {
       return `Type ${minCharacters - inputValue.length} more character${minCharacters - inputValue.length !== 1 ? 's' : ''}...`;
@@ -285,7 +381,7 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
     return placeholder;
   };
 
-  // PHASE 5: Dynamic input styling based on state
+  // Dynamic input styling based on state
   const getInputColor = () => {
     if (inputValue.length > 0 && inputValue.length < minCharacters) {
       return 'orange'; // Warning state
@@ -327,10 +423,39 @@ const EnhancedSearchInput: React.FC<EnhancedSearchInputProps> = ({
 };
 
 /**
- * Advanced DataGrid component for Store Updates
- * COLUMN UPDATE: Removed level column, Priority renamed to Level showing batch_level
- * STYLED: Changed Published Date and Description text color to match version subtext
- * FIXED: Updated batch_level badge colors to match actual API data values
+ * Helper function to get consistent row background colors across all themes
+ * Uses consistent blue colors for selected rows (same as MantineTheme)
+ */
+const getRowBackgroundColor = (
+  isSelected: boolean,
+  isExpanded: boolean,
+  theme: any,
+  colorScheme: string
+) => {
+  if (!isSelected && !isExpanded) {
+    return undefined; // Standard state - transparent
+  }
+
+  // Use consistent blue across all themes (same as MantineTheme selected row color)
+  if (colorScheme === 'dark') {
+    return alpha(theme.colors.blue[8], 0.15);
+  } else {
+    return alpha(theme.colors.blue[1], 0.3);
+  }
+};
+
+/**
+ * UPDATED DataGrid component with EXPANDABLE ROWS:
+ * 1. Application Name (using application_name from dot-walked application.name)
+ * 2. Latest (actual version number from available_version.version) 
+ * 3. Published Date
+ * 4. Description
+ * 5. Level (latest version level)
+ * 
+ * EXPANDABLE: Click rows to show sys_store_app details below the selected row
+ * COLORS: Consistent blue theme-agnostic colors for selected and expanded rows
+ * BUTTONS: Standardized to variant="light" styling
+ * SMART CLEAR: Implements smart clearing strategy - no backend refetch for filter clearing
  */
 export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
   filteringHook,
@@ -339,50 +464,65 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
   data,
   compactMode = false,
   onRowClick,
-  onRowDoubleClick
+  onRowDoubleClick,
+  onDataRefresh, // For data-changing operations (install, sync)
+  onClearState   // NEW: For smart client-side clearing only
 }) => {
+  // EXPANDABLE ROWS STATE: Track which row is expanded (only one at a time)
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+
+  // Theme and color scheme for consistent styling
+  const theme = useMantineTheme();
+  const { colorScheme } = useMantineColorScheme();
+  const { currentTheme } = useThemeManagement();
+  
+  // FIXED: Check if Vercel theme is active for custom hover colors
+  const isVercelTheme = currentTheme === 'vercel';
+
   // Create unique row key generator for duplicate sys_ids
   const generateRowKey = useCallback((record: StoreUpdate, index: number) => {
     return `${record.sys_id}-${index}-${record.level}-${record.batch_level}`;
   }, []);
 
-  // COLUMN UPDATE: Removed old 'level' column, renamed 'Priority' to 'Level'
-  // STYLED: Updated Published Date and Description columns to use 'dimmed' color
-  // FIXED: Updated batch_level badge colors to match actual API values (major/minor/patch)
+  // SIMPLIFIED columns configuration - using dot-walked application.name, no string manipulation
+  // UPDATED: Removed "Installed" column, increased Application Name and Description widths
   const columns: ColumnConfig[] = useMemo(() => [
     {
-      key: 'name',
+      key: 'application_name',
       label: 'Application Name',
       sortable: true,
-      width: compactMode ? '200px' : '300px',
+      width: compactMode ? '300px' : '350px',
       render: (record) => (
-        <Stack gap={2}>
+        <Group gap={4} align="center">
+          <ActionIcon
+            size="xs"
+            variant="subtle"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleExpand(record.sys_id);
+            }}
+          >
+            {expandedRowId === record.sys_id ? (
+              <IconChevronDown size={12} />
+            ) : (
+              <IconChevronRightCollapsed size={12} />
+            )}
+          </ActionIcon>
           <Text fw={600} size="sm" lineClamp={1}>
-            {record.name}
+            {record.application_name || record.name}
           </Text>
-          <Text size="xs" c="dimmed" lineClamp={1}>
-            Version: {record.installed_version}
-          </Text>
-        </Stack>
+        </Group>
       )
     },
     {
-      key: 'batch_level',
-      label: 'Level', // CHANGED: From 'Priority' to 'Level'
+      key: 'available_version_version',
+      label: 'Latest',
       sortable: true,
       width: '100px',
       render: (record) => (
-        <Badge
-          color={
-            // FIXED: Updated colors to match actual API data values (major/minor/patch)
-            record.batch_level === 'major' ? 'red' :
-            record.batch_level === 'minor' ? 'yellow' : 'green'
-          }
-          variant="filled"
-          size="sm"
-        >
-          {record.batch_level}
-        </Badge>
+        <Text size="sm" c="blue" fw={500}>
+          {record.available_version_version || 'N/A'}
+        </Text>
       )
     },
     {
@@ -391,10 +531,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
       sortable: true,
       width: '120px',
       render: (record) => (
-        <Text 
-          size="xs" 
-          c="dimmed" // CHANGED: From conditional color to always 'dimmed' to match version subtext
-        >
+        <Text size="sm" c="dimmed">
           {formatDate(record.available_version_publish_date)}
         </Text>
       )
@@ -403,7 +540,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
       key: 'available_version_short_description',
       label: 'Description',
       sortable: false,
-      width: compactMode ? '150px' : '200px',
+      width: compactMode ? '200px' : '250px',
       render: (record) => (
         <Tooltip 
           label={record.available_version_short_description || 'No description available'}
@@ -411,44 +548,15 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
           maw={300}
           position="top-start"
         >
-          <Text 
-            size="xs" 
-            c="dimmed" // CHANGED: From conditional color to always 'dimmed' to match version subtext
-            lineClamp={1}
-          >
+          <Text size="sm" c="dimmed" lineClamp={1}>
             {record.available_version_short_description || 'No description available'}
           </Text>
         </Tooltip>
       )
     },
     {
-      key: 'update_counts',
-      label: 'Updates Available',
-      sortable: false,
-      width: compactMode ? '120px' : '150px',
-      render: (record) => (
-        <Group gap={4}>
-          {record.major_count > 0 && (
-            <Badge size="xs" color="red" variant="dot">
-              {record.major_count}M
-            </Badge>
-          )}
-          {record.minor_count > 0 && (
-            <Badge size="xs" color="yellow" variant="dot">
-              {record.minor_count}m
-            </Badge>
-          )}
-          {record.patch_count > 0 && (
-            <Badge size="xs" color="green" variant="dot">
-              {record.patch_count}p
-            </Badge>
-          )}
-        </Group>
-      )
-    },
-    {
       key: 'latest_version_level',
-      label: 'Latest',
+      label: 'Level',
       sortable: true,
       width: '80px',
       render: (record) => (
@@ -457,62 +565,40 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
             record.latest_version_level === 'major' ? 'red' :
             record.latest_version_level === 'minor' ? 'yellow' : 'green'
           }
-          size="xs"
-          variant="outline"
+          variant="filled"
+          size="sm"
         >
-          {record.latest_version_level}
+          {record.latest_version_level || 'unknown'}
         </Badge>
       )
-    },
-    {
-      key: 'actions',
-      label: 'Actions',
-      sortable: false,
-      width: '100px',
-      render: (record) => (
-        <Group gap={4}>
-          <Tooltip label="View Details">
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleViewDetails(record);
-              }}
-            >
-              <IconEye size={14} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="Download Update">
-            <ActionIcon
-              size="sm"
-              variant="subtle"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDownloadUpdate(record);
-              }}
-            >
-              <IconDownload size={14} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
-      )
     }
-  ], [compactMode]);
+  ], [compactMode, expandedRowId]);
+
+  // Handle expand/collapse toggle
+  const handleToggleExpand = useCallback((recordId: string) => {
+    setExpandedRowId(prevId => prevId === recordId ? null : recordId);
+    
+    logger.trackUserAction('toggle-expand-row', createLogContext({
+      recordId,
+      expanded: expandedRowId !== recordId,
+      previouslyExpanded: expandedRowId
+    }));
+  }, [expandedRowId]);
 
   // Handle sorting
   const handleSort = useCallback((columnKey: string) => {
     filteringHook.updateSorting(columnKey);
   }, [filteringHook]);
 
-  // Handle row interactions
+  // UPDATED: Handle row interactions with expand functionality
   const handleRowClick = useCallback((record: StoreUpdate) => {
     if (onRowClick) {
       onRowClick(record);
     } else {
-      handleViewDetails(record);
+      // Default behavior: toggle expand
+      handleToggleExpand(record.sys_id);
     }
-  }, [onRowClick]);
+  }, [onRowClick, handleToggleExpand]);
 
   const handleRowDoubleClick = useCallback((record: StoreUpdate) => {
     if (onRowDoubleClick) {
@@ -522,33 +608,57 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
     }
   }, [onRowDoubleClick, selectionHook]);
 
-  // Handle actions
+  // Handle actions (kept for legacy compatibility)
   const handleViewDetails = useCallback((record: StoreUpdate) => {
     logger.trackUserAction('view-details', createLogContext({
       recordId: record.sys_id,
-      appName: record.name
+      appName: record.application_name || record.name
     }));
   }, []);
 
   const handleDownloadUpdate = useCallback((record: StoreUpdate) => {
     logger.trackUserAction('download-update', createLogContext({
       recordId: record.sys_id,
-      appName: record.name
+      appName: record.application_name || record.name
     }));
   }, []);
 
+  // SMART CLEAR: Header checkbox with intelligent clearing strategy
   const handleSelectAll = useCallback((checked: boolean) => {
     if (checked) {
       selectionHook.selectAllVisible();
+      
+      logger.trackUserAction('select-all-toggle', createLogContext({
+        selectAll: checked,
+        visibleRecords: data.length,
+        action: 'select-all'
+      }));
     } else {
+      // SMART CLEAR: Header checkbox deselect only clears client-side state (no backend refetch)
+      logger.info('Header checkbox deselect: Starting smart client-side clearing', createLogContext({
+        selectAll: checked,
+        visibleRecords: data.length,
+        action: 'smart-client-clear',
+        reason: 'header-checkbox-deselect',
+        backendRefetch: false
+      }));
+      
+      // Clear selections
       selectionHook.clearSelection();
+      
+      // Smart clear state (filters + client-side reset only)
+      if (onClearState) {
+        onClearState(); // Clear filters + selections client-side only
+      }
+      
+      logger.trackUserAction('select-all-toggle', createLogContext({
+        selectAll: checked,
+        visibleRecords: data.length,
+        action: 'smart-client-clear-completed',
+        backendRefetch: false
+      }));
     }
-    
-    logger.trackUserAction('select-all-toggle', createLogContext({
-      selectAll: checked,
-      visibleRecords: data.length
-    }));
-  }, [selectionHook, data.length]);
+  }, [selectionHook, onClearState, data.length]);
 
   // Handle page size change
   const handlePageSizeChange = useCallback((newPageSize: string | null) => {
@@ -558,7 +668,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
     }
   }, [paginationHook]);
 
-  // PHASE 5: Enhanced search handler with performance logging
+  // Enhanced search handler with performance logging
   const handleEnhancedSearch = useCallback((value: string) => {
     filteringHook.setSearch(value);
     
@@ -594,7 +704,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
     return data.some(record => selectionHook.isRecordSelected(record.sys_id));
   }, [data, selectionHook]);
 
-  // PHASE 5: Enhanced search status for better UX
+  // Enhanced search status for better UX
   const searchStatus = useMemo(() => {
     const hasSearch = filteringHook.filters.search.length > 0;
     const searchLength = filteringHook.filters.search.length;
@@ -609,7 +719,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
     return null;
   }, [filteringHook.filters.search]);
 
-  // Empty state
+  // SMART REFRESH: Empty state with intelligent refresh button
   if (data.length === 0) {
     return (
       <Paper p="xl">
@@ -625,13 +735,31 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
             </Text>
             <Group gap="md">
               {filteringHook.insights.hasActiveFilters && (
-                <Button variant="light" onClick={filteringHook.clearFilters}>
+                <Button 
+                  variant="light" 
+                  onClick={() => {
+                    // Smart clear: client-side only
+                    if (onClearState) {
+                      onClearState();
+                    } else {
+                      filteringHook.clearFilters();
+                    }
+                  }}
+                >
                   Clear Filters
                 </Button>
               )}
               <Button
+                variant="light"
                 leftSection={<IconRefresh size={16} />}
-                onClick={() => logger.info('Refresh clicked from empty state')}
+                onClick={() => {
+                  if (onDataRefresh) {
+                    // Smart refresh: backend refetch for data-changing operations
+                    onDataRefresh();
+                  } else {
+                    logger.info('Refresh clicked from empty state (no callback provided)');
+                  }
+                }}
               >
                 Refresh
               </Button>
@@ -644,7 +772,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
 
   return (
     <Stack gap="md">
-      {/* PHASE 5: Enhanced Search and Controls */}
+      {/* Enhanced Search and Controls */}
       <Paper p="md">
         <Group justify="space-between">
           <Group gap="md">
@@ -668,7 +796,6 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
               </Badge>
             )}
             
-            {/* PHASE 5: Enhanced search status feedback */}
             {searchStatus && (
               <Badge color="blue" variant="filled" size="sm">
                 {searchStatus.message}
@@ -681,7 +808,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
               data={[
                 { value: '10', label: '10 per page' },
                 { value: '25', label: '25 per page' },
-                { value: '50', label: '50 per page' },
+                { value: '50', label: '50 per page' },  
                 { value: '100', label: '100 per page' },
               ]}
               value={paginationHook.pageSize.toString()}
@@ -693,23 +820,24 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
         </Group>
       </Paper>
 
-      {/* Data Table */}
+      {/* Data Table with Expandable Rows */}
       <GenericTable
         data={data}
         loading={false}
-        striped
         highlightOnHover
         onError={(error) => logger.error('DataGrid error', error)}
       >
         <Table.Thead>
           <Table.Tr>
             <Table.Th w={40}>
-              <Checkbox
-                checked={allVisibleSelected}
-                indeterminate={someVisibleSelected && !allVisibleSelected}
-                onChange={(e) => handleSelectAll(e.currentTarget.checked)}
-                aria-label="Select all visible records"
-              />
+              <Tooltip label="Select all visible records (deselect to clear filters - smart clear, no server reload)">
+                <Checkbox
+                  checked={allVisibleSelected}
+                  indeterminate={someVisibleSelected && !allVisibleSelected}
+                  onChange={(e) => handleSelectAll(e.currentTarget.checked)}
+                  aria-label="Select all visible records (deselect to clear filters - smart clear, no server reload)"
+                />
+              </Tooltip>
             </Table.Th>
             {columns.map((column) => (
               <Table.Th
@@ -732,43 +860,63 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
         <Table.Tbody>
           {data.map((record, index) => {
             const uniqueRowKey = generateRowKey(record, index);
+            const isExpanded = expandedRowId === record.sys_id;
+            const isSelected = selectionHook.isRecordSelected(record.sys_id);
             
             return (
-              <Table.Tr
-                key={uniqueRowKey}
-                style={{
-                  cursor: 'pointer',
-                  backgroundColor: selectionHook.isRecordSelected(record.sys_id) 
-                    ? 'var(--mantine-color-blue-0)' : undefined
-                }}
-                onClick={(e) => {
-                  if (e.detail === 1) {
-                    handleRowClick(record);
-                  } else if (e.detail === 2) {
-                    handleRowDoubleClick(record);
-                  }
-                }}
-              >
-                <Table.Td>
-                  <Checkbox
-                    checked={selectionHook.isRecordSelected(record.sys_id)}
-                    onChange={() => selectionHook.selectRecord(record, 'toggle')}
-                    onClick={(e) => e.stopPropagation()}
-                    aria-label={`Select ${record.name}`}
-                  />
-                </Table.Td>
-                {columns.map((column) => (
-                  <Table.Td key={column.key}>
-                    {column.render(record)}
+              <React.Fragment key={uniqueRowKey}>
+                {/* Main Data Row */}
+                <Table.Tr
+                  style={{
+                    cursor: 'pointer',
+                    backgroundColor: getRowBackgroundColor(isSelected, isExpanded, theme, colorScheme)
+                  }}
+                  onClick={(e) => {
+                    if (e.detail === 1) {
+                      handleRowClick(record);
+                    } else if (e.detail === 2) {
+                      handleRowDoubleClick(record);
+                    }
+                  }}
+                >
+                  <Table.Td>
+                    <Checkbox
+                      checked={isSelected}
+                      onChange={() => selectionHook.selectRecord(record, 'toggle')}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Select ${record.application_name || record.name}`}
+                    />
                   </Table.Td>
-                ))}
-              </Table.Tr>
+                  {columns.map((column) => (
+                    <Table.Td key={column.key}>
+                      {column.render(record)}
+                    </Table.Td>
+                  ))}
+                </Table.Tr>
+
+                {/* Expandable Details Row - NO HOVER EFFECT */}
+                {isExpanded && (
+                  <Table.Tr style={{ 
+                    backgroundColor: 'transparent',
+                    cursor: 'default'
+                  }}>
+                    <Table.Td colSpan={columns.length + 1} p={0} style={{ 
+                      backgroundColor: 'transparent',
+                      cursor: 'default'
+                    }}>
+                      <Collapse in={isExpanded}>
+                        <ExpandableRowDetails record={record} />
+                      </Collapse>
+                    </Table.Td>
+                  </Table.Tr>
+                )}
+              </React.Fragment>
             );
           })}
         </Table.Tbody>
       </GenericTable>
 
-      {/* Pagination */}
+      {/* Pagination - UPDATED: Standardized button styling */}
       {paginationHook.totalPages > 1 && (
         <Group justify="space-between">
           <Text size="sm" c="dimmed">
@@ -781,7 +929,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
           
           <Group gap="sm">
             <Button
-              variant="subtle"
+              variant="light"
               size="xs"
               onClick={paginationHook.goToFirstPage}
               disabled={!paginationHook.canGoPrevious}
@@ -800,7 +948,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
             />
             
             <Button
-              variant="subtle"
+              variant="light"
               size="xs"
               onClick={paginationHook.goToLastPage}
               disabled={!paginationHook.canGoNext}
@@ -826,7 +974,7 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
             <Group gap="sm">
               <GenericButton
                 size="xs"
-                variant="subtle"
+                variant="light"
                 onClick={selectionHook.clearSelection}
               >
                 Clear Selection
@@ -839,6 +987,26 @@ export const StoreUpdatesDataGrid: React.FC<StoreUpdatesDataGridProps> = ({
             </Group>
           </Group>
         </Alert>
+      )}
+      {/* FIXED: Custom CSS for Vercel theme hover effects (30% lighter) */}
+      {isVercelTheme && (
+        <style>{`
+          /* Table row hover effects for Vercel theme - 30% lighter */
+          [data-mantine-color-scheme="light"] .mantine-Table-tr:hover {
+            background-color: rgba(120, 120, 120, 0.08) !important;
+          }
+          [data-mantine-color-scheme="dark"] .mantine-Table-tr:hover {
+            background-color: rgba(180, 180, 180, 0.12) !important;
+          }
+          
+          /* Menu item hover effects for Vercel theme - 30% lighter */
+          [data-mantine-color-scheme="light"] .mantine-Menu-item:hover {
+            background-color: rgba(100, 100, 100, 0.06) !important;
+          }
+          [data-mantine-color-scheme="dark"] .mantine-Menu-item:hover {
+            background-color: rgba(160, 160, 160, 0.1) !important;
+          }
+        `}</style>
       )}
     </Stack>
   );

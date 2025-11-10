@@ -93,10 +93,10 @@
 <body>
   <!-- React will mount here -->
   <div id="root" data-react-component="true">
+    <!-- Minimal loading state - React initializes quickly -->
     <div class="loading-container">
       <h1 class="loading-title">ServiceNow Store Updates Manager</h1>
       <div class="loading-spinner"></div>
-      <p class="loading-subtitle">Loading dual-source hybrid statistics...</p>
     </div>
   </div>
   
@@ -107,42 +107,26 @@
     var currentUser = gs.getUser();
     var currentUserName = gs.getUserName();
     
-    // Total records calculation
-    var quickStatsAgg = new GlideAggregate('x_snc_store_upda_1_store_updates');
-    quickStatsAgg.addAggregate('COUNT');
-    quickStatsAgg.query();
-    var totalRecords = quickStatsAgg.next() ? quickStatsAgg.getAggregate('COUNT') : '0';
-    
-    // Level distribution calculation
+    // OPTIMIZED: Single query for both total records and level distribution
     var levelAgg = new GlideAggregate('x_snc_store_upda_1_store_updates');
+    levelAgg.addQuery('batch_level', 'major'); // Base filter: batch_level=major
     levelAgg.addAggregate('COUNT');
-    levelAgg.groupBy('level');
+    levelAgg.groupBy('level'); // Group by 'level' field (not 'batch_level')
     levelAgg.query();
     
-    var majorCount = '0', minorCount = '0', patchCount = '0';
+    var majorCount = '0', minorCount = '0', patchCount = '0', totalRecords = 0;
     while (levelAgg.next()) {
       var level = levelAgg.getValue('level');
-      var count = levelAgg.getAggregate('COUNT');
-      if (level === 'major') majorCount = count;
-      else if (level === 'minor') minorCount = count;  
-      else if (level === 'patch') patchCount = count;
+      var count = parseInt(levelAgg.getAggregate('COUNT') || '0');
+      totalRecords += count; // Calculate total from sum of all levels
+      
+      if (level === 'major') majorCount = count.toString();
+      else if (level === 'minor') minorCount = count.toString();
+      else if (level === 'patch') patchCount = count.toString();
     }
     
-    // Batch level distribution calculation
-    var batchAgg = new GlideAggregate('x_snc_store_upda_1_store_updates');
-    batchAgg.addAggregate('COUNT');
-    batchAgg.groupBy('batch_level');
-    batchAgg.query();
-    
-    var criticalCount = '0', highCount = '0', mediumCount = '0', lowCount = '0';
-    while (batchAgg.next()) {
-      var batchLevel = batchAgg.getValue('batch_level');
-      var count = batchAgg.getAggregate('COUNT');
-      if (batchLevel === 'critical') criticalCount = count;
-      else if (batchLevel === 'high') highCount = count;
-      else if (batchLevel === 'medium') mediumCount = count;
-      else if (batchLevel === 'low') lowCount = count;
-    }
+    // Convert totalRecords to string for consistency
+    totalRecords = totalRecords.toString();
 
     var userGR = new GlideRecord('sys_user');
     userGR.addQuery('sys_id', currentUser.getID());
@@ -215,12 +199,6 @@
         major: "${majorCount}",
         minor: "${minorCount}",
         patch: "${patchCount}"
-      },
-      batchLevelDistribution: {
-        critical: "${criticalCount}",
-        high: "${highCount}",
-        medium: "${mediumCount}",
-        low: "${lowCount}"
       },
       calculatedAt: "${new GlideDateTime().getDisplayValue()}",
       source: 'pattern-2b-server-calculated'

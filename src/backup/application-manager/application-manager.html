@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Application Manager - Store Upda 1</title>
+    
+    <!-- ServiceNow Session Integration -->
+    <script>
+        // ARCHITECTURE: Pattern 2A - Immediate Data Injection
+        // ServiceNow globals must be available before React initialization
+        window.g_ck = window.g_ck || '${gs.getSessionToken()}';
+        window.NOW = window.NOW || {};
+        
+        // User context data (immediate availability)
+        window.snUserContext = {
+            userName: '${gs.getUserName()}',
+            userID: '${gs.getUserID()}',
+            userFullName: '${gs.getUserDisplayName()}',
+            sessionToken: '${gs.getSessionToken()}',
+            instanceUrl: window.location.origin
+        };
+
+        // Application Manager specific context
+        window.snApplicationManagerContext = {
+            pageType: 'application-manager',
+            apiBase: '/api/sn_appclient/appmanager',
+            hasAppManagerAccess: true, // Could be enhanced with role checking
+            defaultTab: 'available_for_you'
+        };
+
+        // Enhanced data preparation for Application Manager
+        window.enhancedData = {
+            userPreferences: {
+                defaultView: 'grid',
+                itemsPerPage: 50,
+                autoRefresh: false
+            },
+            systemInfo: {
+                instanceVersion: '${gs.getProperty("glide.war")}',
+                instanceName: '${gs.getProperty("instance_name")}',
+                buildDate: '${gs.getProperty("glide.build.date")}',
+                buildTag: '${gs.getProperty("glide.build.tag")}'
+            },
+            applicationManagerConfig: {
+                enableBatchOperations: true,
+                enableProgressTracking: true,
+                maxBatchSize: 10,
+                refreshInterval: 30000
+            }
+        };
+
+        // Debug mode detection (ServiceNow-safe parameter)
+        window.snDebugMode = new URLSearchParams(window.location.search).get('sn_debug') === 'true';
+        
+        // Performance monitoring flag
+        window.snPerformanceMonitoring = new URLSearchParams(window.location.search).get('performance_monitoring') === 'true';
+        
+        // Mark as ready for React initialization
+        window.serviceNowDataReady = true;
+        
+        console.log('🚀 Application Manager ServiceNow Context Ready:', {
+            hasUserContext: !!window.snUserContext,
+            hasEnhancedData: !!window.enhancedData,
+            hasAppManagerContext: !!window.snApplicationManagerContext,
+            debugMode: window.snDebugMode,
+            performanceMonitoring: window.snPerformanceMonitoring
+        });
+    </script>
+</head>
+<body>
+    <!-- React Application Mount Point -->
+    <div id="application-manager-root"></div>
+    
+    <!-- Loading Fallback -->
+    <div id="loading-fallback" style="
+        display: flex; 
+        justify-content: center; 
+        align-items: center; 
+        height: 100vh; 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #666;
+        flex-direction: column;
+        gap: 16px;
+    ">
+        <div style="
+            width: 40px; 
+            height: 40px; 
+            border: 3px solid #f3f3f3; 
+            border-top: 3px solid #0073e6; 
+            border-radius: 50%; 
+            animation: spin 1s linear infinite;
+        "></div>
+        <div>Loading Application Manager...</div>
+        <div style="font-size: 12px; color: #999;">
+            Connecting to ServiceNow Application Manager API
+        </div>
+    </div>
+    
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+        }
+        
+        #application-manager-root {
+            min-height: 100vh;
+        }
+        
+        /* Hide loading fallback when React mounts */
+        #application-manager-root:not(:empty) + #loading-fallback {
+            display: none;
+        }
+    </style>
+    
+    <!-- Application Manager React Application Bundle -->
+    <script src="./application-manager.tsx" type="module"></script>
+</body>
+</html>

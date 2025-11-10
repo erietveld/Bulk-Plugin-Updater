@@ -44,9 +44,18 @@ class EnterpriseLogger implements Logger {
         console.warn(formattedMessage);
         break;
       case 'error':
-        console.error(formattedMessage);
+        // FIXED: Single comprehensive error log entry instead of double logging
         if (error) {
-          console.error('Error details:', error);
+          const enhancedContext = {
+            ...context,
+            errorMessage: error.message,
+            errorStack: error.stack,
+            errorName: error.name
+          };
+          const enhancedMessage = this.formatMessage(level, message, enhancedContext);
+          console.error(enhancedMessage);
+        } else {
+          console.error(formattedMessage);
         }
         break;
       case 'debug':
