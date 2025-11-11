@@ -1,5 +1,7 @@
 # Batch Plugin Updater
 
+Original idea, remote table design and Subflow from: https://www.servicenow.com/community/admin-experience-blogs/creating-a-batch-installer-for-store-updates/ba-p/3038560
+
 A modern ServiceNow application for managing and deploying plugin updates in batch operations with an intuitive dashboard interface.
 
 ## 🚀 Overview
