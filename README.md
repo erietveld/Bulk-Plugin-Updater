@@ -1,7 +1,6 @@
 # Batch Plugin Updater
 
 Original idea, remote table design and Subflow from: https://www.servicenow.com/community/admin-experience-blogs/creating-a-batch-installer-for-store-updates/ba-p/3038560
-
 A modern ServiceNow application for managing and deploying plugin updates in batch operations with an intuitive dashboard interface.
 
 ## 🚀 Overview
@@ -97,6 +96,16 @@ The Batch Plugin Updater is a comprehensive ServiceNow application designed to s
 - **Vercel Modern** - Modern minimalist theme inspired by Vercel design system  
 - **Cosmic Night** - Cosmic-inspired theme with purple accents and starry aesthetics
 All themes support both light and dark color schemes and automatically detect system preferences.
+
+
+### Potential Future Improvements
+- Installation options for Available, but not installed, plugins
+- Migrate installation to the Application Manager API
+- Repair option for plugins
+- Maintain a Favorites set, plugins you want always to be updates
+- Schedukle function
+- ...
+
 
 ### Project Structure
 
