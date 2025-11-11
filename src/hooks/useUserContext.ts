@@ -40,6 +40,8 @@ export interface SystemContext {
   readonly base_url: string;
   readonly build_date: string;
   readonly version: string;
+  readonly instance_version: string;
+  readonly instance_patchlevel: string;
   readonly sys_time_zone: string;
   readonly current_time: string;
   readonly current_time_ms: string;
@@ -114,6 +116,8 @@ const createSystemContext = (data: any | null | undefined): SystemContext => {
     base_url: getString(data?.base_url, window?.location?.origin ?? ''),
     build_date: getString(data?.build_date, ''),
     version: getString(data?.version, ''),
+    instance_version: getString(data?.instance_version, ''),
+    instance_patchlevel: getString(data?.instance_patchlevel, ''),
     sys_time_zone: getString(data?.sys_time_zone, 'GMT'),
     current_time: getServiceNowDateTime(data?.current_time) ?? new Date().toISOString(),
     current_time_ms: getString(data?.current_time_ms, Date.now().toString()),
@@ -255,6 +259,8 @@ export const useEnhancedUserContext = () => {
       system: {
         instanceName: systemContext.instance_name,
         version: systemContext.version,
+        instanceVersion: systemContext.instance_version,
+        instancePatchlevel: systemContext.instance_patchlevel,
         currentTime: systemContext.current_time,
         baseUrl: systemContext.base_url
       },

@@ -171,6 +171,7 @@ export const StoreUpdatesDashboard: React.FC<StoreUpdatesDashboardProps> = ({
     compactMode,
     allRecords: storeUpdatesData.data.rawServerData || [], // Full dataset for proper "Install All" behavior
     onDataRefresh: handleDataRefresh,
+    onClearState: handleSmartClearState, // FIXED: Pass the smart clear state function
     filteringHook
   });
 

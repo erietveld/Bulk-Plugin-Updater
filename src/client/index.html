@@ -168,11 +168,33 @@
     };
     
     // Pattern 2A: System context using simple Jelly substitutions
+    var rawVersion = "${gs.getProperty('glide.buildtag.last')}";
+    
+    // Extract clean version info using JavaScript regex
+    var instanceVersion = 'Unknown';
+    var instancePatchlevel = 'Unknown';
+    
+    // Extract version name (e.g., "zurich" from "glide-zurich-07-01-2025__patch2-09-24-2025")
+    var versionMatch = rawVersion.match(/glide-([a-zA-Z]+)/);
+    if (versionMatch && versionMatch[1]) {
+      // Capitalize first letter
+      instanceVersion = versionMatch[1].charAt(0).toUpperCase() + versionMatch[1].slice(1).toLowerCase();
+    }
+    
+    // Extract patch level (e.g., "patch2" from "glide-zurich-07-01-2025__patch2-09-24-2025")
+    var patchMatch = rawVersion.match(/__patch(\d+)/);
+    if (patchMatch && patchMatch[1]) {
+      instancePatchlevel = 'Patch ' + patchMatch[1];
+    }
+    
     var systemContext = {
       instance_name: "${gs.getProperty('instance_name')}" || "${gs.getProperty('glide.servlet.uri')}",
       base_url: "${gs.getProperty('glide.servlet.uri')}",
       build_date: "${gs.getProperty('glide.build.date')}",
-      version: "${gs.getProperty('glide.war')}",
+      build: "${buildTag}",
+      version: rawVersion,
+      instance_version: instanceVersion,
+      instance_patchlevel: instancePatchlevel,
       sys_time_zone: "${gs.getProperty('glide.sys.default.tz')}", 
       current_time: "${new GlideDateTime().getDisplayValue()}",
       current_time_ms: "${new GlideDateTime().getNumericValue()}",
@@ -233,6 +255,9 @@
         injectionTime: window.snImmediateData?.injectionTime,
         userFirstName: window.snImmediateData?.userContext?.first_name,
         instanceName: window.snImmediateData?.systemContext?.instance_name,
+        version: window.snImmediateData?.systemContext?.version,
+        instanceVersion: window.snImmediateData?.systemContext?.instance_version,
+        instancePatchlevel: window.snImmediateData?.systemContext?.instance_patchlevel,
         appScope: window.snImmediateData?.appContext?.app_scope,
         totalRecords: window.snImmediateData?.quickStats?.totalRecords,
         majorUpdates: window.snImmediateData?.quickStats?.levelDistribution?.major,

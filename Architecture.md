@@ -73,11 +73,13 @@ interface BuildAgentDirective {
   // MANDATORY WORKFLOW
   changeProcess: {
     step01: "explicit-get-approval";            // All changes EXPLICITELY need approval first
-    step02: "implement-atomically";             // Make one focused change
+    step02: "implement-atomically";             // Make one focused and atomic change
     step03: "run-diagnostics";                  // validate the source
     step04: "focus-single-issue";               // IF received list of typescript errors: FIRST focus on the top 1 or top 2 when related
     step05: "explain-changes-and-reasoning";    // Tell the user what was changed and why
-    step06: "confirm-build";                    // Ask user approval before starting build
+    step06: "confirm-build";                    // Ask user approval before starting build or do another focused and atomic change
+      step06_Option1: "another-atomic-change";  // user agreed to another change, restart workflow from step01
+      step06_Option2: "build-confirmed";        // user agreed move to build, continue
     step07: "validate-build";                   // npm run build must succeed
     step08: "validate-deployment";              // Deploy to test environment
     step09: "user-review";                      // User acceptance required by in-browser review

@@ -27,6 +27,7 @@ import {
 import { showNotification } from '@mantine/notifications';
 import { ColorSchemeToggle } from '../theme/ColorSchemeToggle';
 import { logger, createLogContext } from '../../monitoring/logger';
+import { useEnhancedUserContext } from '../../hooks/useUserContext';
 
 // Check if debug mode is enabled
 const isDebugMode = () => {
@@ -34,6 +35,8 @@ const isDebugMode = () => {
 };
 
 export const NavigationHeader: React.FC = React.memo(() => {
+  const userContext = useEnhancedUserContext();
+  
   const currentDate = useMemo(() => {
     return new Date().toLocaleDateString('en-US', {
       weekday: 'long',
@@ -184,6 +187,24 @@ export const NavigationHeader: React.FC = React.memo(() => {
                   <Text fw={500}>System Log</Text>
                   <Text size="xs" c="dimmed">View application logs and errors</Text>
                 </div>
+              </Menu.Item>
+
+              <Menu.Divider />
+              
+              <Menu.Label>System Info</Menu.Label>
+              
+              <Menu.Item disabled>
+                <Group justify="space-between">
+                  <Text size="xs">Instance Version</Text>
+                  <Badge size="xs" variant="light">{userContext.system.instanceVersion || 'Unknown'}</Badge>
+                </Group>
+              </Menu.Item>
+              
+              <Menu.Item disabled>
+                <Group justify="space-between">
+                  <Text size="xs">Patch Level</Text>
+                  <Badge size="xs" variant="light">{userContext.system.instancePatchlevel || 'Unknown'}</Badge>
+                </Group>
               </Menu.Item>
 
               <Menu.Divider />

@@ -417,10 +417,13 @@ export const useStoreUpdatesActions = ({
       case 'install-patches':
         await handleInstallPatches();
         break;
+      case 'sync-applications':
+        await handleSyncApplications();
+        break;
       default:
         logger.warn('Unknown batch action', { actionId });
     }
-  }, [selectionHook.selection.selectedIds, isAdmin, showConfirmationModal, handleInstallAll, handleInstallMajor, handleInstallMinor, handleInstallPatches]);
+  }, [selectionHook.selection.selectedIds, isAdmin, showConfirmationModal, handleInstallAll, handleInstallMajor, handleInstallMinor, handleInstallPatches, handleSyncApplications]);
 
   // Primary batch actions with admin role requirements
   const primaryActions = useMemo(() => {
@@ -479,7 +482,7 @@ export const useStoreUpdatesActions = ({
         requiresAdmin: true,
         requiresSelection: false,
         description: 'Install patch updates only'
-      }
+      },
     ];
 
     return actions;
@@ -493,13 +496,17 @@ export const useStoreUpdatesActions = ({
       isEnabled: () => {
         const hasRequiredRole = !action.requiresAdmin || isAdmin;
         const hasRequiredSelection = !action.requiresSelection || selectionHook.stats.hasSelection;
-        return hasRequiredRole && hasRequiredSelection && !isInstalling && !isSyncing;
+        const hasApplicableRecords = action.id === 'sync-applications' || action.applicableCount > 0; // Sync always enabled
+        return hasRequiredRole && hasRequiredSelection && hasApplicableRecords && !isInstalling && !isSyncing;
       },
       // Get disabled reason for tooltip
       getDisabledReason: () => {
         if (!action.requiresAdmin || isAdmin) {
           if (action.requiresSelection && !selectionHook.stats.hasSelection) {
             return 'Select items first';
+          }
+          if (action.id !== 'sync-applications' && action.applicableCount === 0) {
+            return `No ${action.label.toLowerCase()} available`;
           }
           if (isInstalling || isSyncing) {
             return 'Please wait for current operation to complete';
@@ -521,6 +528,7 @@ export const useStoreUpdatesActions = ({
       IconUrgent: <IconUrgent size={16} />,
       IconInfoCircle: <IconInfoCircle size={16} />,
       IconBandage: <IconBandage size={16} />,
+      IconRefresh: <IconRefresh size={16} />,
       IconClock: <IconClock size={16} />,
       IconFileExport: <IconFileExport size={16} />,
       IconEye: <IconEye size={16} />,
@@ -602,7 +610,8 @@ export const useStoreUpdatesActions = ({
   const getButtonState = (action: any) => {
     const hasRequiredRole = !action.requiresAdmin || isAdmin;
     const hasRequiredSelection = !action.requiresSelection || selectionHook.stats.hasSelection;
-    const isEnabled = hasRequiredRole && hasRequiredSelection && !isInstalling && !isSyncing;
+    const hasApplicableRecords = action.id === 'sync-applications' || action.applicableCount > 0; // Sync always enabled
+    const isEnabled = hasRequiredRole && hasRequiredSelection && hasApplicableRecords && !isInstalling && !isSyncing;
 
     if (isEnabled) {
       return {
@@ -619,6 +628,8 @@ export const useStoreUpdatesActions = ({
       disabledReason = 'Administrator privileges required for installation operations';
     } else if (!hasRequiredSelection) {
       disabledReason = 'Select items first';
+    } else if (!hasApplicableRecords) {
+      disabledReason = `No ${action.label.toLowerCase()} available`;
     } else if (isInstalling || isSyncing) {
       disabledReason = 'Please wait for current operation to complete';
     }
@@ -708,8 +719,21 @@ export const useStoreUpdatesActions = ({
           
           <Menu.Divider />
           <Menu.Label>Additional Actions</Menu.Label>
-          <Menu.Item disabled>
-            <Text size="sm" c="dimmed">More actions coming soon...</Text>
+          <Menu.Item
+            leftSection={<IconRefresh size={16} />}
+            onClick={handleSyncApplications}
+            disabled={isInstalling || isSyncing}
+          >
+            <Group justify="space-between" w="100%">
+              <div>
+                <Text size="sm" fw={500}>
+                  Sync Applications
+                </Text>
+                <Text size="xs" c="dimmed" style={{ whiteSpace: 'normal' }}>
+                  Synchronize applications from the store
+                </Text>
+              </div>
+            </Group>
           </Menu.Item>
         </Menu.Dropdown>
       </Menu>
@@ -786,14 +810,16 @@ export const useStoreUpdatesActions = ({
                 <Text size="sm" fw={500}>
                   {isSyncing ? 'Sync in Progress' : 'Installation in Progress'}
                 </Text>
-                <Text size="xs" c="dimmed">
-                  {isSyncing ? '100%' : `${Math.round(progress)}%`}
-                </Text>
+                {!isSyncing && (
+                  <Text size="xs" c="dimmed">
+                    {Math.round(progress)}%
+                  </Text>
+                )}
               </Group>
               <Progress 
                 value={isSyncing ? 100 : progress} 
                 size="sm" 
-                animated={isSyncing}
+                animated={isSyncing || isInstalling}
               />
               <Text size="xs" c="dimmed">
                 {isSyncing ? 'Syncing applications from store...' : message}

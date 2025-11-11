@@ -142,11 +142,22 @@ export const useInstallUpdates = (
           statusMessage: progressState.status_message
         }));
 
-        // Update store with progress
-        batchProgressStore.updateProgress(
-          progressState.percent_complete || 0,
-          progressState.status_message || progressState.status_label || 'Processing...'
-        );
+        // UX IMPROVEMENT: Override progress and status message for better user experience
+        const rawProgress = progressState.percent_complete || 0;
+        const rawStatusMessage = progressState.status_message || progressState.status_label || 'Processing...';
+        
+        // Override 0% progress to show 5% to indicate activity
+        const displayProgress = rawProgress === 0 ? 5 : rawProgress;
+        
+        // Enhance status message for long-running queued operations and finishing stages
+        const displayStatusMessage = rawStatusMessage === 'Executing queued operation' 
+          ? 'Executing queued operation -- This may take a long time.'
+          : (rawStatusMessage === 'Running' && rawProgress >= 90)
+            ? 'Running -- Finishing up, this may take a longer time.'
+            : rawStatusMessage;
+
+        // Update store with enhanced progress values
+        batchProgressStore.updateProgress(displayProgress, displayStatusMessage);
 
         // Handle completion states
         if (progressState.status_label === 'Successful' && progressState.percent_complete === 100) {
