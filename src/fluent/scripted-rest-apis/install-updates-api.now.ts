@@ -61,7 +61,8 @@ RestApi({
         
         // Execute the subflow in foreground with inputs
         var result = sn_fd.FlowAPI.getRunner()
-            .subflow('global.plugin_updater')
+        //    .subflow('global.plugin_updater')
+            .subflow('x_snc_store_upda_1.process_plugin_updates')
             .inForeground()
             .withInputs(inputs)
             .run();
