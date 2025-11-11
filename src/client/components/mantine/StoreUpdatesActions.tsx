@@ -634,16 +634,13 @@ export const useStoreUpdatesActions = ({
       disabledReason = 'Please wait for current operation to complete';
     }
 
+    // FIXED: Return default Mantine styling for disabled buttons - no custom overrides
     return {
-      variant: 'outline' as const,
-      color: isDark ? 'gray' : action.color,
+      variant: 'filled' as const,
+      color: action.color,
       disabled: true,
-      tooltip: disabledReason,
-      style: {
-        borderColor: isDark ? 'var(--mantine-color-gray-6)' : `var(--mantine-color-${action.color}-3)`,
-        color: isDark ? 'var(--mantine-color-gray-5)' : `var(--mantine-color-${action.color}-6)`,
-        backgroundColor: isDark ? 'var(--mantine-color-dark-6)' : 'var(--mantine-color-gray-0)'
-      }
+      tooltip: disabledReason
+      // Removed custom style overrides - let Mantine handle disabled styling
     };
   };
 
@@ -765,7 +762,6 @@ export const useStoreUpdatesActions = ({
                   onClick={() => handleBatchAction(action.id)}
                   disabled={buttonState.disabled}
                   loading={isInstalling && action.id.includes('install')}
-                  style={buttonState.style}
                 >
                   {action.label}
                   {!buttonState.disabled && action.applicableCount > 0 && (

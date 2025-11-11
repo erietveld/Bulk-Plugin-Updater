@@ -9,7 +9,7 @@ import dashboardPage from '../../client/index.html';
 
 export const store_updates_dashboard = UiPage({
   $id: Now.ID['store-updates-dashboard'],
-  endpoint: 'x_snc_store_upda_1_dashboard.do',
+  endpoint: 'x_snc_store_upda_1_plugin_updater.do',
   direct: true,
   html: dashboardPage
 });

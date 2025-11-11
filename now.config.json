@@ -1,6 +1,6 @@
 {
   "scope": "x_snc_store_upda_1",
   "scopeId": "a0a02e10fbcd72d0e80bf602beefdc21",
-  "name": "Store Upda 1",
+  "name": "Batch Plugin Updater",
   "tsconfigPath": "./src/server/tsconfig.json"
 }

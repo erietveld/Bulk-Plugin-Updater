@@ -162,6 +162,22 @@ declare global {
                         table: 'sys_hub_action_instance_v2'
                         id: 'b55ee7fdfb413a14e80bf602beefdccc'
                     }
+                    batch_plugin_config_separator: {
+                        table: 'sys_app_module'
+                        id: 'b2508875c8c5461e918e853ce86da5eb'
+                    }
+                    batch_plugin_store_updates_table: {
+                        table: 'sys_app_module'
+                        id: '38c8b522c789422c88e1ce52e7b9e3ad'
+                    }
+                    batch_plugin_updater_dashboard: {
+                        table: 'sys_app_module'
+                        id: '87191335587b4d18b7d0c15b4e634138'
+                    }
+                    batch_plugin_updater_menu: {
+                        table: 'sys_app_application'
+                        id: 'fb9b5a562d78416e9cf3c499281c750e'
+                    }
                     bom_json: {
                         table: 'sys_module'
                         id: '2d3c8331565f45958bf81908f3567ae2'
@@ -1345,10 +1361,12 @@ declare global {
                     'x_snc_store_upda_1/StoreUpdatesDashboard-BQFDbv5f': {
                         table: 'sys_ux_lib_asset'
                         id: '0acdb64e154947c5b2222cb19e980cb0'
+                        deleted: true
                     }
                     'x_snc_store_upda_1/StoreUpdatesDashboard-BQFDbv5f.js.map': {
                         table: 'sys_ux_lib_asset'
                         id: '706c117653af48de9c625409ca33d7cd'
+                        deleted: true
                     }
                     'x_snc_store_upda_1/StoreUpdatesDashboard-BS5i6pb6': {
                         table: 'sys_ux_lib_asset'
@@ -1669,6 +1687,14 @@ declare global {
                         table: 'sys_ux_lib_asset'
                         id: 'e5258a6092c24ba5b76419b6ca4b7a5a'
                         deleted: true
+                    }
+                    'x_snc_store_upda_1/StoreUpdatesDashboard-DUdoL2eu': {
+                        table: 'sys_ux_lib_asset'
+                        id: 'd450f8d18b164c77a1f0959d49c5225b'
+                    }
+                    'x_snc_store_upda_1/StoreUpdatesDashboard-DUdoL2eu.js.map': {
+                        table: 'sys_ux_lib_asset'
+                        id: 'ae5de812c9534f07beedafc50d1fab42'
                     }
                     'x_snc_store_upda_1/StoreUpdatesDashboard-gEFzuvVW': {
                         table: 'sys_ux_lib_asset'
