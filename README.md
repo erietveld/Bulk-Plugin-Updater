@@ -1,1 +1,1 @@
-Initial test version for INternal ServiceNow release
+Initial test version for Internal ServiceNow release
