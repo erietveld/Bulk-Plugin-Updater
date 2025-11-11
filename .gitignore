@@ -1,6 +1,7 @@
 .DS_Store
 .now/
 dist/
+sndocs/
 node_modules/
 target/
 *.tsbuildinfo
